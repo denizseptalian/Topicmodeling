@@ -8,8 +8,21 @@ import gensim
 import pyLDAvis.gensim_models
 import pyLDAvis
 import logging
+from collections import Counter
+from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
+import re
 
 logging.basicConfig(level=logging.INFO)
+
+# Function to preprocess the text
+def preprocess_text(text):
+    # Remove irrelevant characters
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    # Remove stopwords
+    factory = StopWordRemoverFactory()
+    stopword = factory.create_stop_word_remover()
+    text = stopword.remove(text)
+    return text
 
 # Function to crawl and analyze data
 def crawl_and_analyze(keyword):
@@ -30,12 +43,14 @@ def crawl_and_analyze(keyword):
     # Preprocess the text data for LDA
     documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')  # Combine title and description
     df_texts = pd.DataFrame(documents, columns=['document'])
+    df_texts['document'] = df_texts['document'].apply(preprocess_text)
+    
     processed_docs = [doc.split() for doc in df_texts['document']]
     id2word = gensim.corpora.Dictionary(processed_docs)
     corpus = [id2word.doc2bow(doc) for doc in processed_docs]
     
     # Build LDA model
-    num_topics = 3
+    num_topics = 10
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=num_topics,
@@ -93,9 +108,23 @@ if keyword:
         
         # LDA topics visualization
         st.subheader("LDA Topics")
+        word_counter = Counter()
         for idx, topic in enumerate(lda_model.print_topics()):
             st.write(f"Topic {idx + 1}")
             st.write(topic[1])
+            
+            # Update word counter with the words from each topic
+            words, probs = zip(*lda_model.show_topic(idx, topn=10))
+            word_counter.update(words)
+        
+        # Plot the top 10 words across all topics
+        common_words = word_counter.most_common(10)
+        words, counts = zip(*common_words)
+        plt.figure(figsize=(10, 5))
+        plt.barh(words, counts)
+        plt.xlabel("Counts")
+        plt.title("Top 10 words across all topics")
+        st.pyplot(plt)
         
         # pyLDAvis visualization
         st.subheader("LDA Visualization")
@@ -108,4 +137,3 @@ if keyword:
     except Exception as e:
         logging.exception("An error occurred during processing.")
         st.error(f"An error occurred: {e}")
-
