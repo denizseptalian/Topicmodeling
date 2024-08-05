@@ -7,12 +7,7 @@ from wordcloud import WordCloud
 import gensim
 import pyLDAvis.gensim_models
 import pyLDAvis
-import warnings
 import logging
-
-warnings.filterwarnings('ignore')  # Ignore warnings
-
-logging.basicConfig(level=logging.INFO)
 
 # Function to crawl and analyze data
 def crawl_and_analyze(keyword):
