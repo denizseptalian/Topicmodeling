@@ -1,9 +1,9 @@
-numpy
-pandas
-matplotlib
-GoogleNews
-streamlit
-wordcloud
-gensim
-pyLDAvis
-gensim scipy
+numpy==1.24.3
+pandas==2.0.2
+matplotlib==3.7.1
+GoogleNews==1.7.0
+streamlit==1.22.0
+wordcloud==1.9.2
+gensim==4.3.0
+pyLDAvis==3.4.1
+scipy==1.11.1
