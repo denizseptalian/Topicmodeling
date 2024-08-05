@@ -8,8 +8,11 @@ import gensim
 import pyLDAvis.gensim_models
 import pyLDAvis
 import warnings
+import logging
 
 warnings.filterwarnings('ignore')  # Ignore warnings
+
+logging.basicConfig(level=logging.INFO)
 
 # Function to crawl and analyze data
 def crawl_and_analyze(keyword):
@@ -106,5 +109,5 @@ if keyword:
         st.components.v1.html(html_string, width=1300, height=800)
         
     except Exception as e:
+        logging.exception("An error occurred during processing.")
         st.error(f"An error occurred: {e}")
-
