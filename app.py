@@ -9,6 +9,8 @@ import pyLDAvis.gensim_models
 import pyLDAvis
 import logging
 
+logging.basicConfig(level=logging.INFO)
+
 # Function to crawl and analyze data
 def crawl_and_analyze(keyword):
     googlenews = GoogleNews(lang='id', region='ID')
