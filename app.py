@@ -8,6 +8,7 @@ import gensim
 import pyLDAvis.gensim_models
 import pyLDAvis
 import warnings
+
 warnings.filterwarnings('ignore')  # Ignore warnings
 
 # Function to crawl and analyze data
@@ -106,3 +107,4 @@ if keyword:
         
     except Exception as e:
         st.error(f"An error occurred: {e}")
+
