@@ -1,6 +1,6 @@
-Pak amri izin bertanya terkait topik/tema data untuk dianalisis dalam lomba SIC tim saya ini. kira kira pak amri lebih saran pakai tema analisis yang mana ya pak buat nyari datanya. 
-(a) Energi terbarukan;
-(b) Lingkungan; 
-(c) Teknologi.
-
-Terimakasih
+streamlit
+pandas
+numpy
+matplotlib
+wordcloud
+scikit-learn
