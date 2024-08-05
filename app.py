@@ -33,7 +33,7 @@ def fetch_page_data(args):
     return googlenews.results()
 
 # Function to crawl and analyze data
-@st.cache_resource(show_spinner=False)
+@st.cache(show_spinner=False)
 def crawl_and_analyze(keyword):
     num_pages = 10
     pool = Pool()
