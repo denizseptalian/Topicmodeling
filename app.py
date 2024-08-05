@@ -25,18 +25,19 @@ def preprocess_text(text):
     return text
 
 # Function to fetch news data from a single page
-def fetch_page_data(i, keyword):
+def fetch_page_data(args):
+    i, keyword = args
     googlenews = GoogleNews(lang='id', region='ID')
     googlenews.search(keyword)
     googlenews.getpage(i)
     return googlenews.results()
 
 # Function to crawl and analyze data
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def crawl_and_analyze(keyword):
     num_pages = 10
     pool = Pool()
-    news_data = pool.starmap(fetch_page_data, [(i, keyword) for i in range(1, num_pages + 1)])
+    news_data = pool.map(fetch_page_data, [(i, keyword) for i in range(1, num_pages + 1)])
     pool.close()
     pool.join()
 
