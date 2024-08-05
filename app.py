@@ -11,7 +11,6 @@ import logging
 from collections import Counter
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 import re
-from multiprocessing import Pool
 import time
 
 logging.basicConfig(level=logging.INFO)
@@ -24,26 +23,23 @@ def preprocess_text(text):
     text = stopword.remove(text)
     return text
 
-# Function to fetch news data from a single page
-def fetch_page_data(args):
-    i, keyword = args
+# Function to fetch news data from multiple pages
+@st.cache(show_spinner=False)
+def fetch_news_data(keyword, num_pages):
     googlenews = GoogleNews(lang='id', region='ID')
-    googlenews.search(keyword)
-    googlenews.getpage(i)
-    return googlenews.results()
+    all_news = []
+
+    for i in range(1, num_pages + 1):
+        googlenews.search(keyword)
+        googlenews.getpage(i)
+        all_news.extend(googlenews.results())
+    
+    return pd.DataFrame(all_news)
 
 # Function to crawl and analyze data
 @st.cache(show_spinner=False)
-def crawl_and_analyze(keyword):
-    num_pages = 10
-    pool = Pool()
-    news_data = pool.map(fetch_page_data, [(i, keyword) for i in range(1, num_pages + 1)])
-    pool.close()
-    pool.join()
-
-    # Flatten the list of news data
-    news_data = [item for sublist in news_data for item in sublist]
-    df = pd.DataFrame(news_data)
+def crawl_and_analyze(keyword, num_pages=5):
+    df = fetch_news_data(keyword, num_pages)
 
     # Preprocess the text data for LDA
     documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')
@@ -91,13 +87,15 @@ st.title("Keyword Crawling and LDA Analysis")
 
 # Input keyword
 keyword = st.text_input("Enter a keyword for crawling:")
+num_pages = st.slider("Number of pages to crawl:", min_value=1, max_value=10, value=5)
 
 if keyword:
     try:
         start_time = time.time()
         
-        # Perform crawling and analysis
-        df_dominant_topic, lda_model, corpus, id2word, wordcloud = crawl_and_analyze(keyword)
+        with st.spinner('Crawling and analyzing data...'):
+            # Perform crawling and analysis
+            df_dominant_topic, lda_model, corpus, id2word, wordcloud = crawl_and_analyze(keyword, num_pages)
         
         # Display the dataframe
         st.subheader("Dominant Topic DataFrame")
