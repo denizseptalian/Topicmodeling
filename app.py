@@ -30,7 +30,6 @@ def fetch_news_data(keyword, num_pages):
     all_news = []
 
     for i in range(1, num_pages + 1):
-        googlenews.clear()
         googlenews.search(keyword)
         googlenews.getpage(i)
         all_news.extend(googlenews.results())
@@ -42,52 +41,21 @@ def fetch_news_data(keyword, num_pages):
 def crawl_and_analyze(keyword, num_pages=5):
     df = fetch_news_data(keyword, num_pages)
 
-    # Debug: Show fetched data
-    st.write("Fetched Data:")
-    st.write(df.head())
-
     # Preprocess the text data for LDA
     documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')
     df_texts = pd.DataFrame(documents, columns=['document'])
     df_texts['document'] = df_texts['document'].apply(preprocess_text)
 
-    # Debug: Show preprocessed texts
-    st.write("Preprocessed Texts:")
-    st.write(df_texts.head())
-
     processed_docs = [doc.split() for doc in df_texts['document']]
     id2word = gensim.corpora.Dictionary(processed_docs)
     corpus = [id2word.doc2bow(doc) for doc in processed_docs]
 
-    # Debug: Show dictionary and corpus
-    st.write("Dictionary:")
-    st.write(id2word)
-    st.write("Corpus Sample:")
-    st.write(corpus[:5])
-
     # Build LDA model
-    num_topics = 5  # Reduce the number of topics
-    lda_model = gensim.models.LdaMulticore(
-        corpus=corpus, 
-        id2word=id2word, 
-        num_topics=num_topics, 
-        random_state=0, 
-        passes=10,  # Increase the number of passes
-        iterations=100,  # Increase the number of iterations
-        workers=2
-    )
-
-    # Debug: Show LDA topics
-    st.write("LDA Topics:")
-    for idx, topic in enumerate(lda_model.print_topics()):
-        st.write(f"Topic {idx + 1}: {topic}")
+    num_topics = 10
+    lda_model = gensim.models.LdaMulticore(corpus=corpus, id2word=id2word, num_topics=num_topics, random_state=0, passes=2, workers=2)
 
     # Create a dataframe for dominant topic
     df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist())
-
-    # Debug: Show dominant topics dataframe
-    st.write("Dominant Topics DataFrame:")
-    st.write(df_dominant_topic.head())
 
     # Generate word cloud
     long_string = ', '.join(df_texts['document'].values)
