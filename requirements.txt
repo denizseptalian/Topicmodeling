@@ -4,5 +4,6 @@ matplotlib>=3.4.0
 GoogleNews==1.6.5
 streamlit>=1.0.0
 wordcloud>=1.8.0
-gensim>=4.0.0
+gensim==4.3.1
 pyLDAvis>=3.3.0
+scipy==1.10.0
