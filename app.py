@@ -52,9 +52,11 @@ def crawl_and_analyze(keyword):
     # Build LDA model
     num_topics = 10
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
-                                           id2word=id2word,
-                                           num_topics=num_topics,
-                                           random_state=0)
+                                       id2word=id2word,
+                                       num_topics=num_topics,
+                                       passes=5,  # Reduce number of passes
+                                       iterations=20,  # Reduce number of iterations
+                                       random_state=0)
     
     # Create a dataframe for dominant topic
     df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist())
