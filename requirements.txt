@@ -1,6 +1,8 @@
-streamlit
-pandas
 numpy
+pandas
 matplotlib
+GoogleNews
+streamlit
 wordcloud
-scikit-learn
+gensim
+pyLDAvis
