@@ -31,12 +31,12 @@ def crawl_and_analyze(keyword):
     
     # Collect data from multiple pages
     data_to_append = []
-    for i in range(1, 11):
+    for i in range(1, 6):
         googlenews.getpage(i)
         news = googlenews.results()
         df_temp = pd.DataFrame(news)
         data_to_append.append(df_temp)
-    
+
     # Concatenate all the data into one DataFrame
     df = pd.concat(data_to_append, ignore_index=True)
     
