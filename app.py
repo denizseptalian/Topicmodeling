@@ -30,6 +30,7 @@ def fetch_news_data(keyword, num_pages):
     all_news = []
 
     for i in range(1, num_pages + 1):
+        googlenews.clear()
         googlenews.search(keyword)
         googlenews.getpage(i)
         all_news.extend(googlenews.results())
@@ -52,7 +53,7 @@ def crawl_and_analyze(keyword, num_pages=5):
 
     # Build LDA model
     num_topics = 10
-    lda_model = gensim.models.LdaMulticore(corpus=corpus, id2word=id2word, num_topics=num_topics, random_state=0, passes=2, workers=2)
+    lda_model = gensim.models.LdaMulticore(corpus=corpus, id2word=id2word, num_topics=num_topics, random_state=0, passes=2, iterations=50, workers=2)
 
     # Create a dataframe for dominant topic
     df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist())
