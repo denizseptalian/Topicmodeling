@@ -5,8 +5,10 @@ from GoogleNews import GoogleNews
 import streamlit as st
 from wordcloud import WordCloud
 import gensim
-import pyLDAvis.gensim
+import pyLDAvis.gensim_models
 import pyLDAvis
+import warnings
+warnings.filterwarnings('ignore')  # Ignore warnings
 
 # Function to crawl and analyze data
 def crawl_and_analyze(keyword):
@@ -16,7 +18,7 @@ def crawl_and_analyze(keyword):
     # Collect data from multiple pages
     data_to_append = []
     for i in range(1, 11):
-        googlenews.get_page(i)
+        googlenews.getpage(i)
         news = googlenews.results()
         df_temp = pd.DataFrame(news)
         data_to_append.append(df_temp)
@@ -73,28 +75,34 @@ st.title("Keyword Crawling and LDA Analysis")
 keyword = st.text_input("Enter a keyword for crawling:")
 
 if keyword:
-    # Perform crawling and analysis
-    df_dominant_topic, lda_model, corpus, id2word, wordcloud = crawl_and_analyze(keyword)
-    
-    # Display the dataframe
-    st.subheader("Dominant Topic DataFrame")
-    st.dataframe(df_dominant_topic)
-    
-    # Word cloud visualization
-    st.subheader("Word Cloud")
-    plt.figure(figsize=(10, 5))
-    plt.imshow(wordcloud, interpolation='bilinear')
-    plt.axis('off')
-    st.pyplot(plt)
-    
-    # LDA topics visualization
-    st.subheader("LDA Topics")
-    for idx, topic in enumerate(lda_model.print_topics()):
-        st.write(f"Topic {idx + 1}")
-        st.write(topic[1])
-    
-    # pyLDAvis visualization
-    st.subheader("LDA Visualization")
-    LDAvis_prepared = pyLDAvis.gensim.prepare(lda_model, corpus, id2word)
-    pyLDAvis.save_html(LDAvis_prepared, 'ldavis.html')
-    st.components.v1.html(open('ldavis.html', 'r').read(), width=1300, height=800)
+    try:
+        # Perform crawling and analysis
+        df_dominant_topic, lda_model, corpus, id2word, wordcloud = crawl_and_analyze(keyword)
+        
+        # Display the dataframe
+        st.subheader("Dominant Topic DataFrame")
+        st.dataframe(df_dominant_topic)
+        
+        # Word cloud visualization
+        st.subheader("Word Cloud")
+        plt.figure(figsize=(10, 5))
+        plt.imshow(wordcloud, interpolation='bilinear')
+        plt.axis('off')
+        st.pyplot(plt)
+        
+        # LDA topics visualization
+        st.subheader("LDA Topics")
+        for idx, topic in enumerate(lda_model.print_topics()):
+            st.write(f"Topic {idx + 1}")
+            st.write(topic[1])
+        
+        # pyLDAvis visualization
+        st.subheader("LDA Visualization")
+        LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
+        pyLDAvis.save_html(LDAvis_prepared, 'ldavis.html')
+        with open('ldavis.html', 'r') as f:
+            html_string = f.read()
+        st.components.v1.html(html_string, width=1300, height=800)
+        
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
