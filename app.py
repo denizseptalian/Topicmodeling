@@ -17,17 +17,20 @@ from multiprocessing import Pool
 
 logging.basicConfig(level=logging.INFO)
 
+# Function to preprocess text batch
+def preprocess_batch(text_batch, stopword):
+    return [stopword.remove(re.sub(r'[^a-zA-Z0-9\s]', '', text)) for text in text_batch]
+
 # Function to preprocess the text
 def preprocess_text(texts):
     factory = StopWordRemoverFactory()
     stopword = factory.create_stop_word_remover()
     
-    def preprocess_batch(text_batch):
-        return [stopword.remove(re.sub(r'[^a-zA-Z0-9\s]', '', text)) for text in text_batch]
-    
     # Use multiprocessing for faster preprocessing
     with Pool() as pool:
-        texts = pool.map(preprocess_batch, np.array_split(texts, pool._processes))
+        num_chunks = pool._processes
+        chunks = np.array_split(texts, num_chunks)
+        texts = pool.starmap(preprocess_batch, [(chunk, stopword) for chunk in chunks])
     return [item for sublist in texts for item in sublist]
 
 # Function to crawl and analyze data
