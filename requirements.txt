@@ -5,7 +5,7 @@ GoogleNews==1.6.6
 streamlit==1.22.0
 wordcloud==1.8.1
 gensim==4.1.2
-pyLDAvis==3.4.1
+pyLDAvis==3.3.1
 Sastrawi==1.0.1
 scipy==1.10.1
 scikit-learn==1.2.2
