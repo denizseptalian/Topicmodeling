@@ -24,7 +24,7 @@ def preprocess_text(text):
     return text
 
 # Function to fetch news data from multiple pages
-@st.cache(show_spinner=False)
+@st.cache_data(show_spinner=False)
 def fetch_news_data(keyword, num_pages):
     googlenews = GoogleNews(lang='id', region='ID')
     all_news = []
@@ -37,7 +37,7 @@ def fetch_news_data(keyword, num_pages):
     return pd.DataFrame(all_news)
 
 # Function to crawl and analyze data
-@st.cache(allow_output_mutation=True, show_spinner=False)
+@st.cache_data(allow_output_mutation=True, show_spinner=False)
 def crawl_and_analyze(keyword, num_pages=5):
     df = fetch_news_data(keyword, num_pages)
 
