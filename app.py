@@ -5,66 +5,79 @@ from GoogleNews import GoogleNews
 import streamlit as st
 from wordcloud import WordCloud
 import gensim
+import pyLDAvis.gensim_models
+import pyLDAvis
 import logging
 from collections import Counter
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 import re
 import time
-import pyLDAvis.gensim_models as gensimvis
-import pyLDAvis
 
 logging.basicConfig(level=logging.INFO)
 
 # Function to preprocess the text
 def preprocess_text(text):
+    # Remove irrelevant characters
     text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    # Remove stopwords
     factory = StopWordRemoverFactory()
     stopword = factory.create_stop_word_remover()
     text = stopword.remove(text)
     return text
 
-# Function to fetch news data from multiple pages
-@st.cache(show_spinner=False)
-def fetch_news_data(keyword, num_pages):
-    googlenews = GoogleNews(lang='id', region='ID')
-    all_news = []
-
-    for i in range(1, num_pages + 1):
-        googlenews.search(keyword)
-        googlenews.getpage(i)
-        all_news.extend(googlenews.results())
-    
-    return pd.DataFrame(all_news)
-
 # Function to crawl and analyze data
-@st.cache(allow_output_mutation=True, show_spinner=False)
-def crawl_and_analyze(keyword, num_pages=5):
-    df = fetch_news_data(keyword, num_pages)
+def crawl_and_analyze(keyword):
+    googlenews = GoogleNews(lang='id', region='ID')
+    googlenews.search(keyword)
+    
+    # Collect data from multiple pages with delay
+    data_to_append = []
+    for i in range(1, 11):
+        time.sleep(2)  # Add delay to prevent rate limiting
+        googlenews.getpage(i)
+        news = googlenews.results()
+        if news:
+            df_temp = pd.DataFrame(news)
+            data_to_append.append(df_temp)
+    
+    # Concatenate all the data into one DataFrame
+    if data_to_append:
+        df = pd.concat(data_to_append, ignore_index=True)
+    else:
+        raise ValueError("No data fetched from Google News")
+
+    # Ensure the necessary columns are present
+    if 'title' not in df.columns or 'desc' not in df.columns:
+        raise KeyError("Required columns 'title' or 'desc' are missing in the fetched data")
 
     # Preprocess the text data for LDA
-    documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')
+    documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')  # Combine title and description
     df_texts = pd.DataFrame(documents, columns=['document'])
     df_texts['document'] = df_texts['document'].apply(preprocess_text)
-
+    
     processed_docs = [doc.split() for doc in df_texts['document']]
     id2word = gensim.corpora.Dictionary(processed_docs)
     corpus = [id2word.doc2bow(doc) for doc in processed_docs]
-
+    
     # Build LDA model
-    num_topics = 5  # Reduced number of topics
-    lda_model = gensim.models.LdaMulticore(corpus=corpus, id2word=id2word, num_topics=num_topics, random_state=0, passes=1, workers=2)  # Reduced number of passes
-
+    num_topics = 10
+    lda_model = gensim.models.LdaMulticore(corpus=corpus,
+                                           id2word=id2word,
+                                           num_topics=num_topics,
+                                           passes=10,
+                                           random_state=0)
+    
     # Create a dataframe for dominant topic
-    df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist())
-
+    df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist(), original_df=df)
+    
     # Generate word cloud
     long_string = ', '.join(df_texts['document'].values)
     wordcloud = WordCloud(background_color="white", max_words=5000, contour_width=3, contour_color='steelblue').generate(long_string)
-
+    
     return df_dominant_topic, lda_model, corpus, id2word, wordcloud
 
 # Function to format topics per sentence
-def format_topics_sentences(ldamodel, corpus, texts):
+def format_topics_sentences(ldamodel, corpus, texts, original_df):
     sent_topics_df = pd.DataFrame()
 
     for i, row in enumerate(ldamodel[corpus]):
@@ -80,6 +93,10 @@ def format_topics_sentences(ldamodel, corpus, texts):
     sent_topics_df.columns = ['Dominant_Topic', 'Perc_Contribution', 'Topic_Keywords']
     contents = pd.Series(texts)
     sent_topics_df = pd.concat([sent_topics_df, contents.reset_index(drop=True)], axis=1)
+    
+    # Add media column
+    sent_topics_df = pd.concat([sent_topics_df, original_df[['media']].reset_index(drop=True)], axis=1)
+    
     return sent_topics_df
 
 # Streamlit UI
@@ -87,60 +104,48 @@ st.title("Keyword Crawling and LDA Analysis")
 
 # Input keyword
 keyword = st.text_input("Enter a keyword for crawling:")
-num_pages = st.slider("Number of pages to crawl:", min_value=1, max_value=10, value=5)
 
 if keyword:
     try:
-        start_time = time.time()
+        # Perform crawling and analysis
+        df_dominant_topic, lda_model, corpus, id2word, wordcloud = crawl_and_analyze(keyword)
         
-        with st.spinner('Crawling and analyzing data...'):
-            # Perform crawling and analysis
-            df_dominant_topic, lda_model, corpus, id2word, wordcloud = crawl_and_analyze(keyword, num_pages)
-        
-        st.success(f"Data crawling and analysis completed in {time.time() - start_time:.2f} seconds")
-
         # Display the dataframe
-        with st.expander("Show Dominant Topic DataFrame"):
-            st.subheader("Dominant Topic DataFrame")
-            st.dataframe(df_dominant_topic)
+        st.subheader("Dominant Topic DataFrame")
+        st.dataframe(df_dominant_topic)
         
         # Word cloud visualization
-        with st.expander("Show Word Cloud"):
-            st.subheader("Word Cloud")
-            plt.figure(figsize=(10, 5))
-            plt.imshow(wordcloud, interpolation='bilinear')
-            plt.axis('off')
-            st.pyplot(plt)
-
+        st.subheader("Word Cloud")
+        plt.figure(figsize=(10, 5))
+        plt.imshow(wordcloud, interpolation='bilinear')
+        plt.axis('off')
+        st.pyplot(plt)
+        
         # LDA topics visualization
-        with st.expander("Show LDA Topics"):
-            st.subheader("LDA Topics")
-            word_counter = Counter()
-            for idx, topic in enumerate(lda_model.print_topics()):
-                st.write(f"Topic {idx + 1}")
-                st.write(topic[1])
-                
-                # Update word counter with the words from each topic
-                words, probs = zip(*lda_model.show_topic(idx, topn=10))
-                word_counter.update(words)
+        st.subheader("LDA Topics")
+        word_counter = Counter()
+        for idx, topic in enumerate(lda_model.print_topics()):
+            st.write(f"Topic {idx + 1}")
+            st.write(topic[1])
             
-            # Plot the top 10 words across all topics
-            common_words = word_counter.most_common(10)
-            words, counts = zip(*common_words)
-            plt.figure(figsize=(10, 5))
-            plt.barh(words, counts)
-            plt.xlabel("Counts")
-            plt.title("Top 10 words across all topics")
-            st.pyplot(plt)
-
+            # Update word counter with the words from each topic
+            words, probs = zip(*lda_model.show_topic(idx, topn=10))
+            word_counter.update(words)
+        
+        # Plot the top 10 words across all topics
+        common_words = word_counter.most_common(10)
+        words, counts = zip(*common_words)
+        plt.figure(figsize=(10, 5))
+        plt.barh(words, counts)
+        plt.xlabel("Counts")
+        plt.title("Top 10 words across all topics")
+        st.pyplot(plt)
+        
         # pyLDAvis visualization
-        with st.expander("Show LDA Visualization"):
-            st.subheader("LDA Visualization")
-            LDAvis_prepared = gensimvis.prepare(lda_model, corpus, id2word)
-            pyLDAvis.save_html(LDAvis_prepared, 'ldavis.html')
-            with open('ldavis.html', 'r') as f:
-                html_string = f.read()
-            st.components.v1.html(html_string, width=1300, height=800)
+        st.subheader("LDA Visualization")
+        vis = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
+        pyLDAvis_html = pyLDAvis.prepared_data_to_html(vis)
+        st.components.v1.html(pyLDAvis_html, height=1000, width=1250)
         
     except Exception as e:
         logging.exception("An error occurred during processing.")
