@@ -15,7 +15,7 @@ import time
 
 logging.basicConfig(level=logging.INFO)
 
-# Function to preprocess the text
+# Fungsi untuk prapemrosesan teks
 def preprocess_text(text):
     text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
     factory = StopWordRemoverFactory()
@@ -23,14 +23,14 @@ def preprocess_text(text):
     text = stopword.remove(text)
     return text
 
-# Function to crawl and analyze data
+# Fungsi untuk mengambil dan menganalisis data
 def crawl_and_analyze(keyword):
     googlenews = GoogleNews(lang='id', region='ID')
     googlenews.search(keyword)
     
     data_to_append = []
-    for i in range(1, 4):  # Fetch fewer pages for testing
-        time.sleep(2)
+    for i in range(1, 3):  # Ambil lebih sedikit halaman untuk pengujian
+        time.sleep(1)  # Kurangi waktu sleep
         googlenews.getpage(i)
         news = googlenews.results()
         if news:
@@ -40,10 +40,10 @@ def crawl_and_analyze(keyword):
     if data_to_append:
         df = pd.concat(data_to_append, ignore_index=True)
     else:
-        raise ValueError("No data fetched from Google News")
+        raise ValueError("Tidak ada data yang diambil dari Google News")
 
     if 'title' not in df.columns or 'desc' not in df.columns:
-        raise KeyError("Required columns 'title' or 'desc' are missing in the fetched data")
+        raise KeyError("Kolom 'title' atau 'desc' yang diperlukan hilang dalam data yang diambil")
 
     documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')
     df_texts = pd.DataFrame(documents, columns=['document'])
@@ -53,11 +53,11 @@ def crawl_and_analyze(keyword):
     id2word = gensim.corpora.Dictionary(processed_docs)
     corpus = [id2word.doc2bow(doc) for doc in processed_docs]
     
-    num_topics = 5  # Use fewer topics for testing
+    num_topics = 3  # Gunakan topik yang lebih sedikit untuk pengujian
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=num_topics,
-                                           passes=5,  # Use fewer passes for testing
+                                           passes=3,  # Gunakan passes yang lebih sedikit untuk pengujian
                                            random_state=0)
     
     df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist(), original_df=df)
@@ -67,7 +67,7 @@ def crawl_and_analyze(keyword):
     
     return df_dominant_topic, lda_model, corpus, id2word, wordcloud
 
-# Function to format topics per sentence
+# Fungsi untuk memformat topik per kalimat
 def format_topics_sentences(ldamodel, corpus, texts, original_df):
     sent_topics_df = pd.DataFrame()
 
@@ -89,16 +89,16 @@ def format_topics_sentences(ldamodel, corpus, texts, original_df):
     
     return sent_topics_df
 
-# Streamlit UI
-st.title("Keyword Crawling and LDA Analysis")
+# UI Streamlit
+st.title("Pencarian Kata Kunci dan Analisis LDA")
 
-keyword = st.text_input("Enter a keyword for crawling:")
+keyword = st.text_input("Masukkan kata kunci untuk pencarian:")
 
 if keyword:
     try:
         df_dominant_topic, lda_model, corpus, id2word, wordcloud = crawl_and_analyze(keyword)
         
-        st.subheader("Dominant Topic DataFrame")
+        st.subheader("Dataframe Topik Dominan")
         st.dataframe(df_dominant_topic)
         
         st.subheader("Word Cloud")
@@ -107,10 +107,10 @@ if keyword:
         plt.axis('off')
         st.pyplot(plt)
         
-        st.subheader("LDA Topics")
+        st.subheader("Topik LDA")
         word_counter = Counter()
         for idx, topic in enumerate(lda_model.print_topics()):
-            st.write(f"Topic {idx + 1}")
+            st.write(f"Topik {idx + 1}")
             st.write(topic[1])
             
             words, probs = zip(*lda_model.show_topic(idx, topn=10))
@@ -120,15 +120,15 @@ if keyword:
         words, counts = zip(*common_words)
         plt.figure(figsize=(10, 5))
         plt.barh(words, counts)
-        plt.xlabel("Counts")
-        plt.title("Top 10 words across all topics")
+        plt.xlabel("Jumlah")
+        plt.title("10 Kata Teratas di Semua Topik")
         st.pyplot(plt)
         
-        st.subheader("LDA Visualization")
+        st.subheader("Visualisasi LDA")
         vis = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
         pyLDAvis_html = pyLDAvis.prepared_data_to_html(vis)
         st.components.v1.html(pyLDAvis_html, height=1000, width=1250)
         
     except Exception as e:
-        logging.exception("An error occurred during processing.")
-        st.error(f"An error occurred: {e}")
+        logging.exception("Terjadi kesalahan selama pemrosesan.")
+        st.error(f"Terjadi kesalahan: {e}")
