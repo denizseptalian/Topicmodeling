@@ -29,10 +29,10 @@ def crawl_and_analyze(keyword):
     googlenews.search(keyword)
     
     data_to_append = []
-    for i in range(1, 3):  # Ambil lebih sedikit halaman untuk pengujian
+    for i in range(1, 2):  # Ambil hanya satu halaman untuk pengujian
         time.sleep(1)  # Kurangi waktu sleep
         googlenews.getpage(i)
-        news = googlenews.results()
+        news = googlenews.results()[:10]  # Ambil hanya 10 dokumen per halaman
         if news:
             df_temp = pd.DataFrame(news)
             data_to_append.append(df_temp)
@@ -53,7 +53,7 @@ def crawl_and_analyze(keyword):
     id2word = gensim.corpora.Dictionary(processed_docs)
     corpus = [id2word.doc2bow(doc) for doc in processed_docs]
     
-    num_topics = 3  # Gunakan topik yang lebih sedikit untuk pengujian
+    num_topics = 2  # Gunakan topik yang lebih sedikit untuk pengujian
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=num_topics,
