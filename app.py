@@ -25,6 +25,9 @@ def preprocess_text(text):
 
 # Fungsi untuk mengambil dan menganalisis data
 def crawl_and_analyze(keyword):
+    logging.info("Mulai pengambilan data dari Google News")
+    start_time = time.time()
+    
     googlenews = GoogleNews(lang='id', region='ID')
     googlenews.search(keyword)
     
@@ -32,7 +35,7 @@ def crawl_and_analyze(keyword):
     for i in range(1, 2):  # Ambil hanya satu halaman untuk pengujian
         time.sleep(1)  # Kurangi waktu sleep
         googlenews.getpage(i)
-        news = googlenews.results()[:10]  # Ambil hanya 10 dokumen per halaman
+        news = googlenews.results()[:5]  # Ambil hanya 5 dokumen per halaman
         if news:
             df_temp = pd.DataFrame(news)
             data_to_append.append(df_temp)
@@ -41,6 +44,9 @@ def crawl_and_analyze(keyword):
         df = pd.concat(data_to_append, ignore_index=True)
     else:
         raise ValueError("Tidak ada data yang diambil dari Google News")
+    
+    end_time = time.time()
+    logging.info(f"Pengambilan data selesai dalam {end_time - start_time:.2f} detik")
 
     if 'title' not in df.columns or 'desc' not in df.columns:
         raise KeyError("Kolom 'title' atau 'desc' yang diperlukan hilang dalam data yang diambil")
@@ -49,19 +55,31 @@ def crawl_and_analyze(keyword):
     df_texts = pd.DataFrame(documents, columns=['document'])
     df_texts['document'] = df_texts['document'].apply(preprocess_text)
     
+    logging.info("Mulai prapemrosesan teks")
+    start_time = time.time()
+    
     processed_docs = [doc.split() for doc in df_texts['document']]
     id2word = gensim.corpora.Dictionary(processed_docs)
     corpus = [id2word.doc2bow(doc) for doc in processed_docs]
+    
+    end_time = time.time()
+    logging.info(f"Prapemrosesan teks selesai dalam {end_time - start_time:.2f} detik")
+
+    logging.info("Mulai pelatihan model LDA")
+    start_time = time.time()
     
     num_topics = 2  # Gunakan topik yang lebih sedikit untuk pengujian
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=num_topics,
-                                           passes=2,  # Gunakan passes yang lebih sedikit untuk pengujian
-                                           iterations=25,  # Gunakan iterasi yang lebih sedikit untuk pengujian
+                                           passes=1,  # Gunakan passes yang lebih sedikit untuk pengujian
+                                           iterations=10,  # Gunakan iterasi yang lebih sedikit untuk pengujian
                                            workers=1,  # Gunakan hanya satu worker untuk menghindari overhead paralelisasi
                                            random_state=0)
     
+    end_time = time.time()
+    logging.info(f"Pelatihan model LDA selesai dalam {end_time - start_time:.2f} detik")
+
     df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist(), original_df=df)
     
     long_string = ', '.join(df_texts['document'].values)
