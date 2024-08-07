@@ -57,7 +57,9 @@ def crawl_and_analyze(keyword):
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=num_topics,
-                                           passes=3,  # Gunakan passes yang lebih sedikit untuk pengujian
+                                           passes=2,  # Gunakan passes yang lebih sedikit untuk pengujian
+                                           iterations=25,  # Gunakan iterasi yang lebih sedikit untuk pengujian
+                                           workers=1,  # Gunakan hanya satu worker untuk menghindari overhead paralelisasi
                                            random_state=0)
     
     df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist(), original_df=df)
