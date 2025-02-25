@@ -5,6 +5,8 @@ from GoogleNews import GoogleNews
 import streamlit as st
 import logging
 import time
+from wordcloud import WordCloud
+import collections
 
 logging.basicConfig(level=logging.INFO)
 
@@ -28,7 +30,7 @@ def analyze_news(keyword, num_pages=5):
     df = fetch_news_data(keyword, num_pages)
     
     if df.empty:
-        return None, None, df
+        return None, None, None, df
     
     # Convert date column to datetime format
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
@@ -42,7 +44,12 @@ def analyze_news(keyword, num_pages=5):
     publisher_data = df['media'].value_counts().reset_index()
     publisher_data.columns = ['Publisher', 'Count']
     
-    return trend_data, publisher_data, df
+    # Generate word frequency
+    all_text = ' '.join(df['title'].astype(str))
+    word_counts = collections.Counter(all_text.split())
+    word_df = pd.DataFrame(word_counts.items(), columns=['Word', 'Count']).sort_values(by='Count', ascending=False)
+    
+    return trend_data, publisher_data, word_df, df
 
 # Streamlit UI
 st.title("📊 Analisis Tren Waktu dan Klasifikasi Penerbit Berita Google News")
@@ -56,7 +63,7 @@ if keyword:
         start_time = time.time()
         
         with st.spinner('Crawling dan menganalisis data...'):
-            trend_data, publisher_data, df = analyze_news(keyword, num_pages)
+            trend_data, publisher_data, word_df, df = analyze_news(keyword, num_pages)
         
         if trend_data is None:
             st.error("Tidak ada berita ditemukan untuk kata kunci ini.")
@@ -87,6 +94,18 @@ if keyword:
             plt.ylabel("Penerbit")
             plt.title("Top 10 Penerbit Berita")
             st.pyplot(plt)
+            
+            # Display word frequency analysis
+            st.subheader("📊 Frekuensi Kata dalam Judul Berita")
+            st.dataframe(word_df.head(20))
+            
+            # Display word cloud
+            st.subheader("☁️ WordCloud dari Judul Berita")
+            wordcloud = WordCloud(width=800, height=400, background_color='black').generate(' '.join(word_df['Word']))
+            plt.figure(figsize=(10, 5))
+            plt.imshow(wordcloud, interpolation='bilinear')
+            plt.axis("off")
+            st.pyplot(plt)
         
         end_time = time.time()
         st.success(f"✅ Proses selesai dalam {end_time - start_time:.2f} detik")
@@ -94,4 +113,3 @@ if keyword:
     except Exception as e:
         logging.exception("Terjadi kesalahan saat memproses data.")
         st.error(f"⚠ Terjadi kesalahan: {e}")
-
