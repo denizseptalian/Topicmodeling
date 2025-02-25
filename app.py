@@ -37,10 +37,13 @@ def crawl_and_analyze(keyword):
     # Concatenate all the data into one DataFrame
     df = pd.concat(data_to_append, ignore_index=True)
     
+    # Convert date column to datetime format
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    
     # Preprocess the text data
     documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')  # Combine title and description
-    df_texts = pd.DataFrame(documents, columns=['document'])
-    df_texts['document'] = df_texts['document'].apply(preprocess_text)
+    df_texts = df.copy()
+    df_texts['document'] = documents.apply(preprocess_text)
     
     # Generate word cloud
     long_string = ', '.join(df_texts['document'].values)
@@ -51,7 +54,13 @@ def crawl_and_analyze(keyword):
     word_counts = Counter(words)
     most_common_words = word_counts.most_common(10)
     
-    return df_texts, wordcloud, most_common_words
+    # Analyze trending news over time
+    trend_data = df['date'].dt.date.value_counts().sort_index()
+    
+    # Analyze top 10 media sources
+    top_media = df['media'].value_counts().head(10)
+    
+    return df_texts, wordcloud, most_common_words, trend_data, top_media
 
 # Streamlit UI
 st.title("Keyword Crawling Analysis")
@@ -62,7 +71,7 @@ keyword = st.text_input("Enter a keyword for crawling:")
 if keyword:
     try:
         # Perform crawling and analysis
-        df_texts, wordcloud, most_common_words = crawl_and_analyze(keyword)
+        df_texts, wordcloud, most_common_words, trend_data, top_media = crawl_and_analyze(keyword)
         
         # Display the dataframe
         st.subheader("Crawled Data")
@@ -78,6 +87,19 @@ if keyword:
         # Display most common words
         st.subheader("Most Common Words")
         st.write(pd.DataFrame(most_common_words, columns=["Word", "Count"]))
+        
+        # Display news trend over time
+        st.subheader("Trending News Over Time")
+        plt.figure(figsize=(10, 5))
+        trend_data.plot(kind='bar')
+        plt.xlabel("Date")
+        plt.ylabel("Number of Articles")
+        plt.title("News Trend Over Time")
+        st.pyplot(plt)
+        
+        # Display top 10 media sources
+        st.subheader("Top 10 Media Sources")
+        st.write(pd.DataFrame(top_media, columns=["Media", "Article Count"]))
     
     except Exception as e:
         logging.exception("An error occurred during processing.")
