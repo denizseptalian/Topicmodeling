@@ -37,9 +37,6 @@ def crawl_and_analyze(keyword):
     # Concatenate all the data into one DataFrame
     df = pd.concat(data_to_append, ignore_index=True)
     
-    # Convert date column to datetime format
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    
     # Preprocess the text data
     documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')  # Combine title and description
     df_texts = df.copy()
@@ -90,7 +87,7 @@ if keyword:
         
         # Display the dataframe
         st.subheader("📊 Data Berita yang Dikumpulkan")
-        st.dataframe(df_texts, height=400)
+        st.dataframe(df_texts.drop(columns=['date'], errors='ignore'), height=400)
         
         # Word cloud visualization
         st.subheader("☁️ Word Cloud")
@@ -105,7 +102,7 @@ if keyword:
         
         # Display top 10 media sources
         st.subheader("🏆 10 Media Paling Aktif")
-        st.table(pd.DataFrame(top_media, columns=["Media", "Jumlah Berita"]))
+        st.table(pd.DataFrame(top_media, columns=["Media", "Jumlah Berita"]).reset_index(drop=True))
     
     except Exception as e:
         logging.exception("An error occurred during processing.")
