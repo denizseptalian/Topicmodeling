@@ -102,7 +102,10 @@ if keyword:
         
         # Display top 10 media sources
         st.subheader("🏆 10 Media Paling Aktif")
-        st.table(pd.DataFrame(top_media, columns=["Media", "Jumlah Berita"]).reset_index(drop=True))
+        if not top_media.empty:
+            st.table(pd.DataFrame(top_media).reset_index().rename(columns={"index": "Media", "media": "Jumlah Berita"}))
+        else:
+            st.write("Tidak ada data media yang tersedia.")
     
     except Exception as e:
         logging.exception("An error occurred during processing.")
