@@ -3,113 +3,73 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from GoogleNews import GoogleNews
 import streamlit as st
-import logging
-import time
 from wordcloud import WordCloud
-import collections
+import logging
+from collections import Counter
+from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
+import re
 
 logging.basicConfig(level=logging.INFO)
 
-# Function to fetch news data from multiple pages
-@st.cache_data(show_spinner=False)
-def fetch_news_data(keyword, num_pages):
+# Function to preprocess the text
+def preprocess_text(text):
+    # Remove irrelevant characters
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    # Remove stopwords
+    factory = StopWordRemoverFactory()
+    stopword = factory.create_stop_word_remover()
+    text = stopword.remove(text)
+    return text
+
+# Function to crawl and analyze data
+def crawl_and_analyze(keyword):
     googlenews = GoogleNews(lang='id', region='ID')
-    all_news = []
-
-    for i in range(1, num_pages + 1):
-        googlenews.clear()
-        googlenews.search(keyword)
+    googlenews.search(keyword)
+    
+    # Collect data from multiple pages
+    data_to_append = []
+    for i in range(1, 11):
         googlenews.getpage(i)
-        all_news.extend(googlenews.results())
+        news = googlenews.results()
+        df_temp = pd.DataFrame(news)
+        data_to_append.append(df_temp)
     
-    return pd.DataFrame(all_news)
-
-# Function to process and analyze news data
-@st.cache_data(show_spinner=False)
-def analyze_news(keyword, num_pages=5):
-    df = fetch_news_data(keyword, num_pages)
+    # Concatenate all the data into one DataFrame
+    df = pd.concat(data_to_append, ignore_index=True)
     
-    if df.empty:
-        return None, None, None, df
+    # Preprocess the text data
+    documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')  # Combine title and description
+    df_texts = pd.DataFrame(documents, columns=['document'])
+    df_texts['document'] = df_texts['document'].apply(preprocess_text)
     
-    # Convert date column to datetime format
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df = df.dropna(subset=['date'])  # Remove rows with invalid dates
-    df['date'] = df['date'].dt.date  # Keep only date, remove time info
+    # Generate word cloud
+    long_string = ', '.join(df_texts['document'].values)
+    wordcloud = WordCloud(background_color="white", max_words=5000, contour_width=3, contour_color='steelblue').generate(long_string)
     
-    # Count articles per day
-    trend_data = df.groupby('date').size().reset_index(name='count')
-    
-    # Count articles per publisher
-    publisher_data = df['media'].value_counts().reset_index()
-    publisher_data.columns = ['Publisher', 'Count']
-    
-    # Generate word frequency
-    all_text = ' '.join(df['title'].astype(str))
-    word_counts = collections.Counter(all_text.split())
-    word_df = pd.DataFrame(word_counts.items(), columns=['Word', 'Count']).sort_values(by='Count', ascending=False)
-    
-    return trend_data, publisher_data, word_df, df
+    return df_texts, wordcloud
 
 # Streamlit UI
-st.title("📊 Analisis Tren Waktu dan Klasifikasi Penerbit Berita Google News")
+st.title("Keyword Crawling Analysis")
 
 # Input keyword
-keyword = st.text_input("Masukkan kata kunci untuk crawling:")
-num_pages = st.slider("Jumlah halaman yang akan dicrawl:", min_value=1, max_value=10, value=5)
+keyword = st.text_input("Enter a keyword for crawling:")
 
 if keyword:
     try:
-        start_time = time.time()
+        # Perform crawling and analysis
+        df_texts, wordcloud = crawl_and_analyze(keyword)
         
-        with st.spinner('Crawling dan menganalisis data...'):
-            trend_data, publisher_data, word_df, df = analyze_news(keyword, num_pages)
+        # Display the dataframe
+        st.subheader("Crawled Data")
+        st.dataframe(df_texts)
         
-        if trend_data is None:
-            st.error("Tidak ada berita ditemukan untuk kata kunci ini.")
-        else:
-            # Display full dataset
-            st.subheader("📰 Data Berita yang Dicrawling")
-            st.dataframe(df)
-            
-            # Display trend data
-            st.subheader("📈 Tren Waktu Berita")
-            plt.figure(figsize=(10, 5))
-            plt.plot(trend_data['date'], trend_data['count'], marker='o', linestyle='-')
-            plt.xlabel("Tanggal")
-            plt.ylabel("Jumlah Berita")
-            plt.title("Tren Waktu Berita")
-            plt.xticks(rotation=45)
-            st.pyplot(plt)
-            
-            # Display publisher data
-            st.subheader("🏢 Kategorisasi Penerbit Berita")
-            st.dataframe(publisher_data)
-            
-            # Visualize top publishers
-            st.subheader("🔝 Penerbit Berita Teratas")
-            plt.figure(figsize=(10, 5))
-            plt.barh(publisher_data['Publisher'][:10], publisher_data['Count'][:10], color='steelblue')
-            plt.xlabel("Jumlah Berita")
-            plt.ylabel("Penerbit")
-            plt.title("Top 10 Penerbit Berita")
-            st.pyplot(plt)
-            
-            # Display word frequency analysis
-            st.subheader("📊 Frekuensi Kata dalam Judul Berita")
-            st.dataframe(word_df.head(20))
-            
-            # Display word cloud
-            st.subheader("☁️ WordCloud dari Judul Berita")
-            wordcloud = WordCloud(width=800, height=400, background_color='black').generate(' '.join(word_df['Word']))
-            plt.figure(figsize=(10, 5))
-            plt.imshow(wordcloud, interpolation='bilinear')
-            plt.axis("off")
-            st.pyplot(plt)
-        
-        end_time = time.time()
-        st.success(f"✅ Proses selesai dalam {end_time - start_time:.2f} detik")
-        
+        # Word cloud visualization
+        st.subheader("Word Cloud")
+        plt.figure(figsize=(10, 5))
+        plt.imshow(wordcloud, interpolation='bilinear')
+        plt.axis('off')
+        st.pyplot(plt)
+    
     except Exception as e:
-        logging.exception("Terjadi kesalahan saat memproses data.")
-        st.error(f"⚠ Terjadi kesalahan: {e}")
+        logging.exception("An error occurred during processing.")
+        st.error(f"An error occurred: {e}")
