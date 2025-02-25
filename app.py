@@ -54,53 +54,59 @@ def crawl_and_analyze(keyword):
     word_counts = Counter(words)
     most_common_words = word_counts.most_common(10)
     
-    # Analyze trending news over time
-    trend_data = df['date'].dt.date.value_counts().sort_index()
-    
     # Analyze top 10 media sources
     top_media = df['media'].value_counts().head(10)
     
-    return df_texts, wordcloud, most_common_words, trend_data, top_media
+    return df_texts, wordcloud, most_common_words, top_media
 
-# Streamlit UI
-st.title("Keyword Crawling Analysis")
+# Streamlit UI Styling
+st.set_page_config(page_title="Keyword Crawling Analysis", layout="wide")
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f0f2f6;
+    }
+    h1, h2, h3 {
+        color: #2E3B55;
+    }
+    .stDataFrame {
+        background-color: white;
+        border-radius: 10px;
+        padding: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.title("🔍 Keyword Crawling & Analysis")
+st.write("Crawl berita dari Google News berdasarkan kata kunci dan analisis hasilnya dengan visualisasi yang menarik.")
 
 # Input keyword
-keyword = st.text_input("Enter a keyword for crawling:")
+keyword = st.text_input("📝 Masukkan Kata Kunci untuk Crawling:", placeholder="Contoh: Teknologi, Politik, Ekonomi")
 
 if keyword:
     try:
         # Perform crawling and analysis
-        df_texts, wordcloud, most_common_words, trend_data, top_media = crawl_and_analyze(keyword)
+        df_texts, wordcloud, most_common_words, top_media = crawl_and_analyze(keyword)
         
         # Display the dataframe
-        st.subheader("Crawled Data")
-        st.dataframe(df_texts)
+        st.subheader("📊 Data Berita yang Dikumpulkan")
+        st.dataframe(df_texts, height=400)
         
         # Word cloud visualization
-        st.subheader("Word Cloud")
-        plt.figure(figsize=(10, 5))
-        plt.imshow(wordcloud, interpolation='bilinear')
-        plt.axis('off')
-        st.pyplot(plt)
+        st.subheader("☁️ Word Cloud")
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.imshow(wordcloud, interpolation='bilinear')
+        ax.axis('off')
+        st.pyplot(fig)
         
         # Display most common words
-        st.subheader("Most Common Words")
-        st.write(pd.DataFrame(most_common_words, columns=["Word", "Count"]))
-        
-        # Display news trend over time
-        st.subheader("Trending News Over Time")
-        plt.figure(figsize=(10, 5))
-        trend_data.plot(kind='bar')
-        plt.xlabel("Date")
-        plt.ylabel("Number of Articles")
-        plt.title("News Trend Over Time")
-        st.pyplot(plt)
+        st.subheader("📌 10 Kata Paling Sering Muncul")
+        st.table(pd.DataFrame(most_common_words, columns=["Kata", "Jumlah"], index=range(1, 11)))
         
         # Display top 10 media sources
-        st.subheader("Top 10 Media Sources")
-        st.write(pd.DataFrame(top_media, columns=["Media", "Article Count"]))
+        st.subheader("🏆 10 Media Paling Aktif")
+        st.table(pd.DataFrame(top_media, columns=["Media", "Jumlah Berita"]))
     
     except Exception as e:
         logging.exception("An error occurred during processing.")
-        st.error(f"An error occurred: {e}")
+        st.error(f"❌ Terjadi kesalahan: {e}")
