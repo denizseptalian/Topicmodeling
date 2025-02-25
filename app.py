@@ -46,7 +46,12 @@ def crawl_and_analyze(keyword):
     long_string = ', '.join(df_texts['document'].values)
     wordcloud = WordCloud(background_color="white", max_words=5000, contour_width=3, contour_color='steelblue').generate(long_string)
     
-    return df_texts, wordcloud
+    # Count most common words
+    words = long_string.split()
+    word_counts = Counter(words)
+    most_common_words = word_counts.most_common(10)
+    
+    return df_texts, wordcloud, most_common_words
 
 # Streamlit UI
 st.title("Keyword Crawling Analysis")
@@ -57,7 +62,7 @@ keyword = st.text_input("Enter a keyword for crawling:")
 if keyword:
     try:
         # Perform crawling and analysis
-        df_texts, wordcloud = crawl_and_analyze(keyword)
+        df_texts, wordcloud, most_common_words = crawl_and_analyze(keyword)
         
         # Display the dataframe
         st.subheader("Crawled Data")
@@ -69,6 +74,10 @@ if keyword:
         plt.imshow(wordcloud, interpolation='bilinear')
         plt.axis('off')
         st.pyplot(plt)
+        
+        # Display most common words
+        st.subheader("Most Common Words")
+        st.write(pd.DataFrame(most_common_words, columns=["Word", "Count"]))
     
     except Exception as e:
         logging.exception("An error occurred during processing.")
