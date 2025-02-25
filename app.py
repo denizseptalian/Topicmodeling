@@ -5,11 +5,12 @@ from GoogleNews import GoogleNews
 import streamlit as st
 from wordcloud import WordCloud
 import gensim
+import pyLDAvis.gensim_models
+import pyLDAvis
 import logging
 from collections import Counter
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 import re
-import time
 
 logging.basicConfig(level=logging.INFO)
 
@@ -28,26 +29,17 @@ def crawl_and_analyze(keyword):
     googlenews = GoogleNews(lang='id', region='ID')
     googlenews.search(keyword)
     
-    # Collect data from multiple pages with delay
+    # Collect data from multiple pages
     data_to_append = []
     for i in range(1, 11):
-        time.sleep(2)  # Add delay to prevent rate limiting
         googlenews.getpage(i)
         news = googlenews.results()
-        if news:
-            df_temp = pd.DataFrame(news)
-            data_to_append.append(df_temp)
+        df_temp = pd.DataFrame(news)
+        data_to_append.append(df_temp)
     
     # Concatenate all the data into one DataFrame
-    if data_to_append:
-        df = pd.concat(data_to_append, ignore_index=True)
-    else:
-        raise ValueError("No data fetched from Google News")
-
-    # Ensure the necessary columns are present
-    if 'title' not in df.columns or 'desc' not in df.columns:
-        raise KeyError("Required columns 'title' or 'desc' are missing in the fetched data")
-
+    df = pd.concat(data_to_append, ignore_index=True)
+    
     # Preprocess the text data for LDA
     documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')  # Combine title and description
     df_texts = pd.DataFrame(documents, columns=['document'])
@@ -65,7 +57,7 @@ def crawl_and_analyze(keyword):
                                            random_state=0)
     
     # Create a dataframe for dominant topic
-    df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist(), original_df=df)
+    df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist())
     
     # Generate word cloud
     long_string = ', '.join(df_texts['document'].values)
@@ -74,7 +66,7 @@ def crawl_and_analyze(keyword):
     return df_dominant_topic, lda_model, corpus, id2word, wordcloud
 
 # Function to format topics per sentence
-def format_topics_sentences(ldamodel, corpus, texts, original_df):
+def format_topics_sentences(ldamodel, corpus, texts):
     sent_topics_df = pd.DataFrame()
 
     for i, row in enumerate(ldamodel[corpus]):
@@ -90,10 +82,6 @@ def format_topics_sentences(ldamodel, corpus, texts, original_df):
     sent_topics_df.columns = ['Dominant_Topic', 'Perc_Contribution', 'Topic_Keywords']
     contents = pd.Series(texts)
     sent_topics_df = pd.concat([sent_topics_df, contents.reset_index(drop=True)], axis=1)
-    
-    # Add media column
-    sent_topics_df = pd.concat([sent_topics_df, original_df[['media']].reset_index(drop=True)], axis=1)
-    
     return sent_topics_df
 
 # Streamlit UI
@@ -137,6 +125,14 @@ if keyword:
         plt.xlabel("Counts")
         plt.title("Top 10 words across all topics")
         st.pyplot(plt)
+        
+        # pyLDAvis visualization
+        st.subheader("LDA Visualization")
+        LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
+        pyLDAvis.save_html(LDAvis_prepared, 'ldavis.html')
+        with open('ldavis.html', 'r') as f:
+            html_string = f.read()
+        st.components.v1.html(html_string, width=1300, height=800)
         
     except Exception as e:
         logging.exception("An error occurred during processing.")
