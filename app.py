@@ -3,137 +3,95 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from GoogleNews import GoogleNews
 import streamlit as st
-from wordcloud import WordCloud
-import gensim
-import pyLDAvis.gensim_models
-import pyLDAvis
 import logging
-from collections import Counter
-from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
-import re
+import time
 
 logging.basicConfig(level=logging.INFO)
 
-# Function to preprocess the text
-def preprocess_text(text):
-    # Remove irrelevant characters
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-    # Remove stopwords
-    factory = StopWordRemoverFactory()
-    stopword = factory.create_stop_word_remover()
-    text = stopword.remove(text)
-    return text
-
-# Function to crawl and analyze data
-def crawl_and_analyze(keyword):
+# Function to fetch news data from multiple pages
+@st.cache_data(show_spinner=False)
+def fetch_news_data(keyword, num_pages):
     googlenews = GoogleNews(lang='id', region='ID')
-    googlenews.search(keyword)
-    
-    # Collect data from multiple pages
-    data_to_append = []
-    for i in range(1, 11):
+    all_news = []
+
+    for i in range(1, num_pages + 1):
+        googlenews.clear()
+        googlenews.search(keyword)
         googlenews.getpage(i)
-        news = googlenews.results()
-        df_temp = pd.DataFrame(news)
-        data_to_append.append(df_temp)
+        all_news.extend(googlenews.results())
     
-    # Concatenate all the data into one DataFrame
-    df = pd.concat(data_to_append, ignore_index=True)
-    
-    # Preprocess the text data for LDA
-    documents = df['title'].fillna('') + ' ' + df['desc'].fillna('')  # Combine title and description
-    df_texts = pd.DataFrame(documents, columns=['document'])
-    df_texts['document'] = df_texts['document'].apply(preprocess_text)
-    
-    processed_docs = [doc.split() for doc in df_texts['document']]
-    id2word = gensim.corpora.Dictionary(processed_docs)
-    corpus = [id2word.doc2bow(doc) for doc in processed_docs]
-    
-    # Build LDA model
-    num_topics = 10
-    lda_model = gensim.models.LdaMulticore(corpus=corpus,
-                                           id2word=id2word,
-                                           num_topics=num_topics,
-                                           random_state=0)
-    
-    # Create a dataframe for dominant topic
-    df_dominant_topic = format_topics_sentences(ldamodel=lda_model, corpus=corpus, texts=df_texts['document'].tolist())
-    
-    # Generate word cloud
-    long_string = ', '.join(df_texts['document'].values)
-    wordcloud = WordCloud(background_color="white", max_words=5000, contour_width=3, contour_color='steelblue').generate(long_string)
-    
-    return df_dominant_topic, lda_model, corpus, id2word, wordcloud
+    return pd.DataFrame(all_news)
 
-# Function to format topics per sentence
-def format_topics_sentences(ldamodel, corpus, texts):
-    sent_topics_df = pd.DataFrame()
-
-    for i, row in enumerate(ldamodel[corpus]):
-        row = sorted(row, key=lambda x: (x[1]), reverse=True)
-        for j, (topic_num, prop_topic) in enumerate(row):
-            if j == 0:
-                wp = ldamodel.show_topic(topic_num)
-                topic_keywords = ", ".join([word for word, prop in wp])
-                sent_topics_df = pd.concat([sent_topics_df, pd.DataFrame([[int(topic_num), round(prop_topic, 4), topic_keywords]])], ignore_index=True)
-            else:
-                break
-
-    sent_topics_df.columns = ['Dominant_Topic', 'Perc_Contribution', 'Topic_Keywords']
-    contents = pd.Series(texts)
-    sent_topics_df = pd.concat([sent_topics_df, contents.reset_index(drop=True)], axis=1)
-    return sent_topics_df
+# Function to process and analyze news data
+@st.cache_data(show_spinner=False)
+def analyze_news(keyword, num_pages=5):
+    df = fetch_news_data(keyword, num_pages)
+    
+    if df.empty:
+        return None, None, df
+    
+    # Convert date column to datetime format
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df = df.dropna(subset=['date'])  # Remove rows with invalid dates
+    df['date'] = df['date'].dt.date  # Keep only date, remove time info
+    
+    # Count articles per day
+    trend_data = df.groupby('date').size().reset_index(name='count')
+    
+    # Count articles per publisher
+    publisher_data = df['media'].value_counts().reset_index()
+    publisher_data.columns = ['Publisher', 'Count']
+    
+    return trend_data, publisher_data, df
 
 # Streamlit UI
-st.title("Keyword Crawling and LDA Analysis")
+st.title("📊 Analisis Tren Waktu dan Klasifikasi Penerbit Berita Google News")
 
 # Input keyword
-keyword = st.text_input("Enter a keyword for crawling:")
+keyword = st.text_input("Masukkan kata kunci untuk crawling:")
+num_pages = st.slider("Jumlah halaman yang akan dicrawl:", min_value=1, max_value=10, value=5)
 
 if keyword:
     try:
-        # Perform crawling and analysis
-        df_dominant_topic, lda_model, corpus, id2word, wordcloud = crawl_and_analyze(keyword)
+        start_time = time.time()
         
-        # Display the dataframe
-        st.subheader("Dominant Topic DataFrame")
-        st.dataframe(df_dominant_topic)
+        with st.spinner('Crawling dan menganalisis data...'):
+            trend_data, publisher_data, df = analyze_news(keyword, num_pages)
         
-        # Word cloud visualization
-        st.subheader("Word Cloud")
-        plt.figure(figsize=(10, 5))
-        plt.imshow(wordcloud, interpolation='bilinear')
-        plt.axis('off')
-        st.pyplot(plt)
-        
-        # LDA topics visualization
-        st.subheader("LDA Topics")
-        word_counter = Counter()
-        for idx, topic in enumerate(lda_model.print_topics()):
-            st.write(f"Topic {idx + 1}")
-            st.write(topic[1])
+        if trend_data is None:
+            st.error("Tidak ada berita ditemukan untuk kata kunci ini.")
+        else:
+            # Display full dataset
+            st.subheader("📰 Data Berita yang Dicrawling")
+            st.dataframe(df)
             
-            # Update word counter with the words from each topic
-            words, probs = zip(*lda_model.show_topic(idx, topn=10))
-            word_counter.update(words)
+            # Display trend data
+            st.subheader("📈 Tren Waktu Berita")
+            plt.figure(figsize=(10, 5))
+            plt.plot(trend_data['date'], trend_data['count'], marker='o', linestyle='-')
+            plt.xlabel("Tanggal")
+            plt.ylabel("Jumlah Berita")
+            plt.title("Tren Waktu Berita")
+            plt.xticks(rotation=45)
+            st.pyplot(plt)
+            
+            # Display publisher data
+            st.subheader("🏢 Kategorisasi Penerbit Berita")
+            st.dataframe(publisher_data)
+            
+            # Visualize top publishers
+            st.subheader("🔝 Penerbit Berita Teratas")
+            plt.figure(figsize=(10, 5))
+            plt.barh(publisher_data['Publisher'][:10], publisher_data['Count'][:10], color='steelblue')
+            plt.xlabel("Jumlah Berita")
+            plt.ylabel("Penerbit")
+            plt.title("Top 10 Penerbit Berita")
+            st.pyplot(plt)
         
-        # Plot the top 10 words across all topics
-        common_words = word_counter.most_common(10)
-        words, counts = zip(*common_words)
-        plt.figure(figsize=(10, 5))
-        plt.barh(words, counts)
-        plt.xlabel("Counts")
-        plt.title("Top 10 words across all topics")
-        st.pyplot(plt)
-        
-        # pyLDAvis visualization
-        st.subheader("LDA Visualization")
-        LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
-        pyLDAvis.save_html(LDAvis_prepared, 'ldavis.html')
-        with open('ldavis.html', 'r') as f:
-            html_string = f.read()
-        st.components.v1.html(html_string, width=1300, height=800)
+        end_time = time.time()
+        st.success(f"✅ Proses selesai dalam {end_time - start_time:.2f} detik")
         
     except Exception as e:
-        logging.exception("An error occurred during processing.")
-        st.error(f"An error occurred: {e}")
+        logging.exception("Terjadi kesalahan saat memproses data.")
+        st.error(f"⚠ Terjadi kesalahan: {e}")
+
