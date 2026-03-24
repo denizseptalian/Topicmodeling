@@ -8,11 +8,12 @@ import re
 from datetime import datetime, timedelta
 import feedparser
 import requests
+from bs4 import BeautifulSoup
 
 # =========================
 # CONFIG & INITIALIZATION
 # =========================
-st.set_page_config(layout="wide", page_title="Dashboard Saham & Sentimen")
+st.set_page_config(layout="wide", page_title="Dashboard Analisis Tesis")
 
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
@@ -24,45 +25,59 @@ def preprocess_text(text):
     return stopword.remove(text)
 
 # =========================
-# STOCK DATA (SCRAPER VERSION)
+# STOCK DATA (SCRAPER BEAUTIFULSOUP)
 # =========================
-def get_stock_data_final(ticker, start_date, end_date):
+def get_stock_data_scraping(ticker, start_date, end_date):
     try:
-        # Kita gunakan Yahoo Finance via URL langsung (CSV Export)
-        # Ini lebih sulit diblokir daripada API library
-        end_ts = int(datetime.combine(end_date, datetime.min.time()).timestamp())
-        start_ts = int(datetime.combine(start_date - timedelta(days=10), datetime.min.time()).timestamp())
+        if not ticker.endswith(".JK"): ticker = f"{ticker}.JK"
         
-        # Jika user input BBCA, kita tambahkan .JK otomatis
-        if not ticker.endswith(".JK"):
-            ticker = f"{ticker}.JK"
-            
-        url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={start_ts}&period2={end_ts}&interval=1d&events=history&includeAdjustedClose=true"
+        # URL Halaman Riwayat Harga Yahoo Finance
+        url = f"https://finance.yahoo.com/quote/{ticker}/history"
         
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
         }
         
         response = requests.get(url, headers=headers)
-        
         if response.status_code != 200:
-            st.sidebar.error(f"Gagal akses server (Code: {response.status_code})")
+            st.error(f"Server Yahoo menolak akses (Code: {response.status_code}). Coba lagi nanti.")
             return None
             
-        import io
-        df = pd.read_csv(io.StringIO(response.text))
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.set_index('Date').sort_index()
+        # Parsing HTML tabel harga
+        soup = BeautifulSoup(response.text, 'lxml')
+        table = soup.find('table', {'data-test': 'historical-prices'})
         
-        # Kalkulasi
+        if not table:
+            # Fallback jika struktur HTML berubah sedikit
+            table = soup.find('table', {'class': 'W(100%) M(0)'})
+
+        df = pd.read_html(str(table))[0]
+        
+        # Bersihkan data (hapus baris dividen atau data kosong)
+        df = df[df['Open'].str.contains("Dividend|Stock Split") == False]
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date'])
+        
+        # Pastikan kolom angka benar-benar numerik
+        cols = ['Open', 'High', 'Low', 'Close*', 'Adj Close**', 'Volume']
+        for col in cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+        df = df.sort_values('Date').set_index('Date')
+        
+        # Kalkulasi kolom tambahan
+        df = df.rename(columns={'Close*': 'Close'})
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
         
-        return df.loc[df.index >= pd.to_datetime(start_date)]
+        # Filter range tanggal
+        mask = (df.index >= pd.to_datetime(start_date)) & (df.index <= pd.to_datetime(end_date))
+        return df.loc[mask]
 
     except Exception as e:
-        st.sidebar.error(f"Error Scraper: {e}")
+        st.sidebar.error(f"Gagal memproses tabel: {e}")
         return None
 
 # =========================
@@ -76,8 +91,8 @@ def crawl_news_rss(keyword):
 
         data = [{"Tanggal": e.get("published", ""), "Judul": e.title, "Sumber": e.get("source", {}).get("title", ""), "Link": e.link} for e in feed.entries]
         df = pd.DataFrame(data)
-        df["doc"] = df["Judul"].apply(preprocess_text)
-        txt = " ".join(df["doc"])
+        df["doc_clean"] = df["Judul"].apply(preprocess_text)
+        txt = " ".join(df["doc_clean"])
         wc = WordCloud(background_color="white", width=800, height=400).generate(txt) if txt.strip() else None
         common = Counter(txt.split()).most_common(10)
         media = df["Sumber"].value_counts().head(10)
@@ -89,38 +104,39 @@ def crawl_news_rss(keyword):
 # UI
 # =========================
 st.title("💹 Dashboard Analisis Saham & Sentimen")
-st.caption("Mode: Direct Access (Anti-403) | Berita: Google RSS")
+st.info("Metode: BeautifulSoup Scraper (Bypass 401) | Berita: RSS")
 
-st.sidebar.header("Konfigurasi")
-ticker_input = st.sidebar.text_input("Ticker (Contoh: BBCA, ASII, TLKM):", value="BBCA")
-keyword_input = st.sidebar.text_input("Kata Kunci Berita:", value="Bank BCA")
+st.sidebar.header("Filter Analisis")
+ticker_in = st.sidebar.text_input("Ticker (Contoh: BBCA, ASII):", value="BBCA")
+keyword_in = st.sidebar.text_input("Keyword Berita:", value="Bank BCA")
 
 c1, c2 = st.sidebar.columns(2)
 start_d = c1.date_input("Mulai", datetime.now() - timedelta(days=20))
 end_d = c2.date_input("Selesai", datetime.now())
 
-if st.sidebar.button("🚀 Jalankan Analisis"):
-    with st.spinner("Menembus pertahanan server..."):
-        df_s = get_stock_data_final(ticker_input, start_d, end_d)
-        df_n, wc, common, media = crawl_news_rss(keyword_input)
+if st.sidebar.button("🚀 Ambil Data"):
+    with st.spinner("Membaca tabel harga dari website..."):
+        df_s = get_stock_data_scraping(ticker_in, start_d, end_d)
+        df_n, wc, common, media = crawl_news_rss(keyword_in)
 
-        tab1, tab2, tab3 = st.tabs(["📉 Grafik Saham", "📰 Daftar Berita", "📊 Visualisasi"])
+        t1, t2, t3 = st.tabs(["📉 Harga Saham", "📰 Berita", "📊 Analisis"])
 
-        with tab1:
+        with t1:
             if df_s is not None and not df_s.empty:
-                st.subheader(f"Data Harga {ticker_input} (Rp)")
+                st.subheader(f"Data Harga {ticker_in} (Rp)")
                 st.dataframe(df_s[['Prev_Close', 'Close', 'Price_Change', 'Pct_Change (%)']].style.format("{:.2f}"), use_container_width=True)
                 st.line_chart(df_s["Close"])
             else:
-                st.error("Gagal menarik data saham. Server sedang memproteksi diri. Coba lagi dalam 1 menit.")
+                st.warning("Tabel harga tidak ditemukan atau kosong. Coba muat ulang halaman.")
 
-        with tab2:
+        with t2:
             if df_n is not None:
-                st.dataframe(df_news_display := df_n[["Tanggal", "Judul", "Sumber", "Link"]], use_container_width=True)
+                st.dataframe(df_n[["Tanggal", "Judul", "Sumber", "Link"]], use_container_width=True)
 
-        with tab3:
+        with t3:
             if wc:
                 fig, ax = plt.subplots(figsize=(10,5))
-                ax.imshow(wc); ax.axis("off")
+                ax.imshow(wc, interpolation="bilinear")
+                ax.axis("off")
                 st.pyplot(fig)
                 st.bar_chart(media)
