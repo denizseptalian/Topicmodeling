@@ -14,7 +14,7 @@ import time
 import requests
 
 # ================= CONFIG =================
-AV_API_KEY = "ISI_API_KEY_KAMU"
+AV_API_KEY = "YQNUKAH419JA2RYV"
 
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
