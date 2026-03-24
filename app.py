@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from alpha_vantage.timeseries import TimeSeries
+import yfinance as yf
 import streamlit as st
 from wordcloud import WordCloud
 from collections import Counter
@@ -9,11 +9,12 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 import re
 from datetime import datetime, timedelta
 import feedparser
+import requests
 
 # =========================
-# CONFIG
+# CONFIG & INITIALIZATION
 # =========================
-AV_API_KEY = "CYJG0OMG7PWSU1V9"
+st.set_page_config(layout="wide", page_title="Dashboard Saham & Berita")
 
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
@@ -29,29 +30,49 @@ def preprocess_text(text):
     return stopword.remove(text)
 
 # =========================
-# STOCK DATA
+# STOCK DATA (YAHOO FINANCE FIX)
 # =========================
-def get_stock_data_av(ticker, start_date, end_date):
+def get_stock_data_yahoo(ticker, start_date, end_date):
     try:
-        ts = TimeSeries(key=AV_API_KEY, output_format='pandas')
-        data, _ = ts.get_daily(symbol=ticker, outputsize='compact')
+        # Mundurkan tanggal sedikit untuk kalkulasi Prev Close
+        start_dt = pd.to_datetime(start_date) - timedelta(days=10)
+        
+        # Gunakan Session agar tidak diblokir server
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
 
-        df = data.rename(columns={'4. close': 'Close'})
-        df.index = pd.to_datetime(df.index)
+        df = yf.download(
+            ticker, 
+            start=start_dt.strftime('%Y-%m-%d'), 
+            end=end_date, 
+            session=session,
+            progress=False,
+            auto_adjust=True
+        )
 
-        start_date = pd.to_datetime(start_date)
-        end_date = pd.to_datetime(end_date)
+        if df.empty:
+            return None
 
-        df = df.loc[(df.index >= start_date) & (df.index <= end_date)]
+        # Perbaikan struktur kolom jika MultiIndex
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
+        df = df.sort_index()
+        
+        # Kalkulasi kolom tambahan
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
 
+        # Filter kembali ke tanggal yang diminta user
+        df = df.loc[df.index >= pd.to_datetime(start_date)]
+        
         return df
 
     except Exception as e:
-        st.error(f"Error saham: {e}")
+        st.error(f"Error penarikan data saham: {e}")
         return None
 
 # =========================
@@ -59,6 +80,7 @@ def get_stock_data_av(ticker, start_date, end_date):
 # =========================
 def crawl_news_rss(keyword):
     try:
+        # Google News RSS bersifat publik dan tidak ada API limit yang ketat
         url = f"https://news.google.com/rss/search?q={keyword.replace(' ', '%20')}&hl=id&gl=ID&ceid=ID:id"
         feed = feedparser.parse(url)
 
@@ -66,29 +88,26 @@ def crawl_news_rss(keyword):
             return None, None, None, None
 
         data = []
-
         for entry in feed.entries:
             data.append({
-                "title": entry.title,
-                "link": entry.link,
-                "published": entry.get("published", ""),
-                "source": entry.get("source", {}).get("title", "")
+                "Tanggal": entry.get("published", ""),
+                "Judul": entry.title,
+                "Sumber": entry.get("source", {}).get("title", ""),
+                "Link": entry.link
             })
 
         df = pd.DataFrame(data)
-
-        df["document"] = df["title"].apply(preprocess_text)
-
-        text = " ".join(df["document"])
+        
+        # Preprocessing untuk WordCloud
+        df["document"] = df["Judul"].apply(preprocess_text)
+        full_text = " ".join(df["document"])
 
         wordcloud, common = None, None
+        if full_text.strip():
+            wordcloud = WordCloud(background_color="white", width=800, height=400).generate(full_text)
+            common = Counter(full_text.split()).most_common(10)
 
-        if text.strip():
-            wordcloud = WordCloud(background_color="white").generate(text)
-            common = Counter(text.split()).most_common(10)
-
-        # TOP MEDIA
-        top_media = df["source"].value_counts().head(10)
+        top_media = df["Sumber"].value_counts().head(10)
 
         return df, wordcloud, common, top_media
 
@@ -97,49 +116,67 @@ def crawl_news_rss(keyword):
         return None, None, None, None
 
 # =========================
-# UI
+# USER INTERFACE
 # =========================
-st.set_page_config(layout="wide")
-st.title("💹 Dashboard Saham & Berita (RSS FIX)")
+st.title("💹 Analisis Sentimen Berita & Pergerakan Saham")
+st.caption("Data Saham: Yahoo Finance | Berita: Google News RSS")
 
-ticker = st.sidebar.text_input("Ticker", "BBCA")
-keyword = st.sidebar.text_input("Keyword", "Bank BCA")
+# SIDEBAR
+st.sidebar.header("Pengaturan Analisis")
+ticker = st.sidebar.text_input("Simbol Saham (Contoh: BBCA.JK atau ASHA.JK):", value="BBCA.JK")
+keyword = st.sidebar.text_input("Kata Kunci Berita:", value="Bank BCA")
 
-c1, c2 = st.sidebar.columns(2)
-start_d = c1.date_input("Mulai", datetime.now() - timedelta(days=20))
-end_d = c2.date_input("Selesai", datetime.now())
+col_date1, col_date2 = st.sidebar.columns(2)
+start_d = col_date1.date_input("Mulai", datetime.now() - timedelta(days=20))
+end_d = col_date2.date_input("Selesai", datetime.now())
 
-if st.sidebar.button("Jalankan"):
-
-    df_s = get_stock_data_av(ticker, start_d, end_d)
+if st.sidebar.button("🚀 Jalankan Analisis"):
+    
+    # 1. Ambil Data Saham
+    df_s = get_stock_data_yahoo(ticker, start_d, end_d)
+    
+    # 2. Ambil Data Berita
     df_n, wc, common, media = crawl_news_rss(keyword)
 
-    tab1, tab2 = st.tabs(["Saham", "Berita"])
+    tab1, tab2, tab3 = st.tabs(["📉 Pergerakan Saham", "📰 Daftar Berita", "📊 Analisis Kata"])
 
-    # SAHAM
+    # --- TAB 1: SAHAM ---
     with tab1:
-        if df_s is not None:
-            st.dataframe(df_s)
+        if df_s is not None and not df_s.empty:
+            st.subheader(f"Tabel Harga {ticker}")
+            st.dataframe(df_s[['Prev_Close', 'Close', 'Price_Change', 'Pct_Change (%)']].style.format("{:.2f}"), use_container_width=True)
+            
+            st.subheader(f"Grafik Harga Penutupan (Close) - {ticker}")
             st.line_chart(df_s["Close"])
         else:
-            st.warning("Data saham kosong")
+            st.warning("Data saham tidak ditemukan. Pastikan ticker menggunakan akhiran .JK untuk bursa Indonesia.")
 
-    # BERITA
+    # --- TAB 2: BERITA ---
     with tab2:
         if df_n is not None:
-            st.success(f"✅ Berita ditemukan: {len(df_n)}")
-            st.dataframe(df_n)
+            st.success(f"Ditemukan {len(df_n)} berita terbaru.")
+            st.dataframe(df_n[["Tanggal", "Judul", "Sumber", "Link"]], use_container_width=True)
+        else:
+            st.error("Tidak ada berita yang ditemukan untuk kata kunci tersebut.")
 
-            if wc:
+    # --- TAB 3: ANALISIS KATA ---
+    with tab3:
+        col_wc, col_freq = st.columns(2)
+        
+        if wc:
+            with col_wc:
+                st.subheader("WordCloud")
                 fig, ax = plt.subplots()
-                ax.imshow(wc)
+                ax.imshow(wc, interpolation="bilinear")
                 ax.axis("off")
                 st.pyplot(fig)
-
-            if common:
-                st.table(pd.DataFrame(common, columns=["Kata","Jumlah"]))
-
-            if not media.empty:
-                st.table(media.reset_index().rename(columns={"index":"Media", "source":"Jumlah"}))
-        else:
-            st.error("❌ RSS juga tidak menemukan berita")
+        
+        if common:
+            with col_freq:
+                st.subheader("10 Kata Terbanyak")
+                df_common = pd.DataFrame(common, columns=["Kata", "Jumlah"])
+                st.table(df_common)
+        
+        if media is not None and not media.empty:
+            st.subheader("Top Media Pemberitaan")
+            st.bar_chart(media)
