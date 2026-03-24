@@ -10,7 +10,7 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 import re
 from datetime import datetime, timedelta
 
-# --- KONFIGURASI ---
+# --- KONFIGURASI API KEY (TETAP SAMA) ---
 AV_API_KEY = "CYJG0OMG7PWSU1V9" # API Key Anda sudah terpasang
 
 # Inisialisasi Sastrawi
@@ -27,16 +27,16 @@ def get_stock_data_av(ticker, start_date, end_date):
     try:
         ts = TimeSeries(key=AV_API_KEY, output_format='pandas')
         
-        # UBAH DISINI: Gunakan 'compact' untuk akun gratis (mengambil 100 data terakhir)
+        # PERBAIKAN: Gunakan 'compact' (untuk akun gratis Alpha Vantage, mengambil 100 data terakhir)
         data, meta_data = ts.get_daily(symbol=ticker, outputsize='compact')
         
-        # Mapping kolom: '4. close' -> 'Close'
+        # Mapping kolom Alpha Vantage: '4. close' -> 'Close'
         df = data.rename(columns={'4. close': 'Close'})
         
-        # Pastikan data terurut (Ascending)
+        # Pastikan data terurut dari tanggal lama ke baru (PENTING untuk Prev Close)
         df = df.sort_index()
         
-        # Hitung Prev Close dan Perubahan
+        # Perhitungan data saham (Prev Close, Change)
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
@@ -44,11 +44,12 @@ def get_stock_data_av(ticker, start_date, end_date):
         # Konversi index ke string untuk filtering
         df.index = pd.to_datetime(df.index).strftime('%Y-%m-%d')
         
-        # Filter berdasarkan rentang tanggal user
+        # Filter berdasarkan rentang tanggal user (Start Date s/d End Date)
+        # Ingat: 'compact' hanya mengambil 100 hari terakhir, pastikan rentang tanggal masuk.
         df_filtered = df.loc[(df.index >= start_date) & (df.index <= end_date)]
         
         if df_filtered.empty:
-            st.sidebar.warning("Data kosong. Pastikan rentang tanggal masuk dalam 100 hari terakhir.")
+            st.sidebar.warning("Data kosong. Pastikan rentang tanggal masuk dalam 100 hari terakhir (compact mode).")
             return None
             
         return df_filtered
@@ -63,6 +64,7 @@ def get_stock_data_av(ticker, start_date, end_date):
 def crawl_news(keyword, start_date, end_date):
     try:
         gn = GoogleNews(lang='id', region='ID')
+        # Gunakan query agar Google News memfilter tanggal
         search_q = f"{keyword} after:{start_date} before:{end_date}"
         gn.search(search_q)
         
@@ -85,17 +87,18 @@ def crawl_news(keyword, start_date, end_date):
         return None, None, None
 
 # --- UI STREAMLIT ---
-st.set_page_config(page_title="Analisis Saham & Sentimen", layout="wide")
-st.markdown("## 📊 Dashboard Analisis Saham (Alpha Vantage API)")
+st.set_page_config(page_title="Analisis Sentimen & Saham", layout="wide")
+st.markdown("## 💹 Dashboard Analisis Saham (Alpha Vantage Official API)")
+st.info("Aplikasi ini menghubungkan sentimen berita harian dengan fluktuasi harga saham di bursa.")
 
-# Sidebar
+# Sidebar Pengaturan
 st.sidebar.header("⚙️ Konfigurasi")
-ticker_input = st.sidebar.text_input("Ticker Saham (Contoh: BBCA.JK atau IDX:BBCA):", value="BBCA.JK")
+ticker_input = st.sidebar.text_input("Ticker Saham (Contoh: BBCA.JK atau IDX:BBCA):", value="BBCA")
 keyword = st.sidebar.text_input("Kata Kunci Berita:", value="Bank Central Asia")
 
-c1, c2 = st.sidebar.columns(2)
-start_d = c1.date_input("Mulai", datetime.now() - timedelta(days=20))
-end_d = c2.date_input("Selesai", datetime.now())
+col1, col2 = st.sidebar.columns(2)
+start_d = col1.date_input("Mulai", datetime.now() - timedelta(days=30))
+end_d = col2.date_input("Selesai", datetime.now())
 
 if st.sidebar.button("🚀 Jalankan Analisis"):
     s_str, e_str = start_d.strftime("%Y-%m-%d"), end_d.strftime("%Y-%m-%d")
@@ -106,23 +109,37 @@ if st.sidebar.button("🚀 Jalankan Analisis"):
 
         tab1, tab2 = st.tabs(["📉 Grafik & Data Saham", "📰 Berita & WordCloud"])
 
+        # --- TAB 1: GRAFIK & DATA SAHAM ---
         with tab1:
             if df_s is not None and not df_s.empty:
-                st.subheader(f"Statistik Harga {ticker_input}")
+                st.subheader(f"Statistik Harga Saham {ticker_input}")
+                
+                # Menampilkan tabel harga (Urutan: Prev Close, Close, Change)
                 show_cols = ['Prev_Close', 'Close', 'Price_Change', 'Pct_Change (%)']
                 st.dataframe(df_s[show_cols].style.format("{:.2f}"), use_container_width=True)
+                
+                # Menampilkan Grafik Pergerakan Harga Close
+                st.subheader(f"Grafik Pergerakan Harga {ticker_input} (Close)")
+                # 'Close' harus dalam format index yang valid untuk line_chart (pandas dataframe)
                 st.line_chart(df_s['Close'])
+                
             else:
-                st.error("Data tidak ditemukan. Tips: Alpha Vantage mungkin butuh format 'IDX:BBCA' untuk beberapa saham Indonesia.")
+                st.error("Gagal menampilkan data saham. Pastikan rentang tanggal masuk dalam 100 hari perdagangan terakhir (Mode Compact).")
 
+        # --- TAB 2: BERITA & WORDCLOUD ---
         with tab2:
             if df_n is not None:
-                st.subheader("Daftar Berita")
-                st.dataframe(df_news[['date', 'title', 'media', 'link']], use_container_width=True)
+                st.subheader("Kumpulan Berita Google News")
+                # Tampilkan kolom penting berita
+                st.dataframe(df_n[['date', 'title', 'media', 'link']], use_container_width=True)
+                
                 if wc:
-                    st.subheader("Visualisasi Kata (WordCloud)")
-                    fig, ax = plt.subplots()
-                    ax.imshow(wc, interpolation="bilinear"); ax.axis("off")
+                    st.subheader("Visualisasi Kata Terbanyak (WordCloud)")
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    ax.imshow(wc, interpolation="bilinear")
+                    ax.axis("off")
                     st.pyplot(fig)
+                else:
+                    st.warning("⚠️ Tidak cukup teks untuk membuat WordCloud.")
             else:
-                st.warning("Berita tidak ditemukan untuk rentang tanggal tersebut.")
+                st.warning("⚠️ Berita tidak ditemukan untuk rentang tanggal tersebut.")
