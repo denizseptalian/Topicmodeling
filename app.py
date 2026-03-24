@@ -26,16 +26,17 @@ def preprocess_text(text):
 def get_stock_data_av(ticker, start_date, end_date):
     try:
         ts = TimeSeries(key=AV_API_KEY, output_format='pandas')
-        # Alpha Vantage menarik data harian (full history)
-        data, meta_data = ts.get_daily(symbol=ticker, outputsize='full')
         
-        # Mapping kolom Alpha Vantage: '4. close' -> 'Close'
+        # UBAH DISINI: Gunakan 'compact' untuk akun gratis (mengambil 100 data terakhir)
+        data, meta_data = ts.get_daily(symbol=ticker, outputsize='compact')
+        
+        # Mapping kolom: '4. close' -> 'Close'
         df = data.rename(columns={'4. close': 'Close'})
         
-        # Pastikan data terurut dari tanggal lama ke baru
+        # Pastikan data terurut (Ascending)
         df = df.sort_index()
         
-        # Perhitungan data saham (Prev Close, Change)
+        # Hitung Prev Close dan Perubahan
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
@@ -46,9 +47,17 @@ def get_stock_data_av(ticker, start_date, end_date):
         # Filter berdasarkan rentang tanggal user
         df_filtered = df.loc[(df.index >= start_date) & (df.index <= end_date)]
         
+        if df_filtered.empty:
+            st.sidebar.warning("Data kosong. Pastikan rentang tanggal masuk dalam 100 hari terakhir.")
+            return None
+            
         return df_filtered
     except Exception as e:
-        st.sidebar.error(f"⚠️ Alpha Vantage Error: {str(e)}")
+        # Jika error karena limit API (5x per menit)
+        if "rate limit" in str(e).lower():
+            st.sidebar.error("⚠️ Limit API tercapai. Tunggu 1 menit lalu klik tombol lagi.")
+        else:
+            st.sidebar.error(f"⚠️ Alpha Vantage Error: {str(e)}")
         return None
 
 def crawl_news(keyword, start_date, end_date):
