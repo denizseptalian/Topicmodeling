@@ -1,138 +1,119 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import yfinance as yf
+from alpha_vantage.timeseries import TimeSeries
 from GoogleNews import GoogleNews
 import streamlit as st
 from wordcloud import WordCloud
-import logging
 from collections import Counter
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 import re
-import requests
 from datetime import datetime, timedelta
 
-# --- SETTING ANTARMUKA ---
-st.set_page_config(page_title="Sentimen & Saham", layout="wide")
+# --- KONFIGURASI ---
+AV_API_KEY = "CYJG0OMG7PWSU1V9" # API Key Anda sudah terpasang
 
 # Inisialisasi Sastrawi
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
 
 def preprocess_text(text):
-    if pd.isna(text): return ""
+    if pd.isna(text) or text == "": return ""
     text = text.lower()
     text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
     return stopword.remove(text)
 
-def get_stock_data(ticker, start_date, end_date):
+def get_stock_data_av(ticker, start_date, end_date):
     try:
-        # Mundurkan tanggal untuk Prev Close
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=12)
+        ts = TimeSeries(key=AV_API_KEY, output_format='pandas')
+        # Alpha Vantage menarik data harian (full history)
+        data, meta_data = ts.get_daily(symbol=ticker, outputsize='full')
         
-        # LOGIKA ANTI-BLOCK: Menggunakan Session dan User-Agent Browser Asli
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Origin': 'https://finance.yahoo.com',
-            'Referer': 'https://finance.yahoo.com'
-        })
-
-        # Download data
-        df_stock = yf.download(
-            ticker, 
-            start=start_dt.strftime("%Y-%m-%d"), 
-            end=end_date, 
-            progress=False,
-            auto_adjust=True,
-            session=session # Gunakan session yang sudah diberi header browser
-        )
+        # Mapping kolom Alpha Vantage: '4. close' -> 'Close'
+        df = data.rename(columns={'4. close': 'Close'})
         
-        if df_stock is None or df_stock.empty:
-            return None
-
-        # Fix MultiIndex (yfinance v0.2+)
-        if isinstance(df_stock.columns, pd.MultiIndex):
-            df_stock.columns = df_stock.columns.get_level_values(0)
-
-        df_final = df_stock.copy()
-        target_col = 'Close' if 'Close' in df_final.columns else df_final.columns[0]
-
-        # Kalkulasi
-        df_final['Prev_Close'] = df_final[target_col].shift(1)
-        df_final['Price_Change'] = df_final[target_col] - df_final['Prev_Close']
-        df_final['Pct_Change (%)'] = (df_final['Price_Change'] / df_final['Prev_Close']) * 100
+        # Pastikan data terurut dari tanggal lama ke baru
+        df = df.sort_index()
         
-        # Filter ke range user
-        df_final.index = pd.to_datetime(df_final.index).strftime('%Y-%m-%d')
-        return df_final.loc[df_final.index >= start_date]
-
+        # Perhitungan data saham (Prev Close, Change)
+        df['Prev_Close'] = df['Close'].shift(1)
+        df['Price_Change'] = df['Close'] - df['Prev_Close']
+        df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
+        
+        # Konversi index ke string untuk filtering
+        df.index = pd.to_datetime(df.index).strftime('%Y-%m-%d')
+        
+        # Filter berdasarkan rentang tanggal user
+        df_filtered = df.loc[(df.index >= start_date) & (df.index <= end_date)]
+        
+        return df_filtered
     except Exception as e:
-        st.sidebar.error(f"⚠️ Detail Error: {str(e)}")
+        st.sidebar.error(f"⚠️ Alpha Vantage Error: {str(e)}")
         return None
 
-def crawl_and_analyze(keyword, start_date, end_date):
+def crawl_news(keyword, start_date, end_date):
     try:
-        googlenews = GoogleNews(lang='id', region='ID')
-        search_query = f"{keyword} after:{start_date} before:{end_date}"
-        googlenews.search(search_query)
+        gn = GoogleNews(lang='id', region='ID')
+        search_q = f"{keyword} after:{start_date} before:{end_date}"
+        gn.search(search_q)
         
-        data_to_append = []
+        res = []
         for i in range(1, 4):
-            googlenews.getpage(i)
-            news = googlenews.results()
-            if news: data_to_append.append(pd.DataFrame(news))
+            gn.getpage(i)
+            if gn.results(): res.append(pd.DataFrame(gn.results()))
         
-        if not data_to_append: return None, None, None, None
+        if not res: return None, None, None
         
-        df = pd.concat(data_to_append, ignore_index=True).drop_duplicates(subset="title")
-        df["document"] = (df["title"].fillna("") + " " + df["desc"].fillna("")).apply(preprocess_text)
+        df = pd.concat(res).drop_duplicates(subset="title")
+        df["doc"] = (df["title"].fillna("") + " " + df["desc"].fillna("")).apply(preprocess_text)
         
-        long_string = " ".join(df["document"].values)
-        wc = WordCloud(background_color="white").generate(long_string) if long_string.strip() else None
-        common = Counter(long_string.split()).most_common(10)
-        top_media = df["media"].value_counts().head(10) if "media" in df.columns else pd.Series()
+        txt = " ".join(df["doc"].values)
+        wc = WordCloud(background_color="white").generate(txt) if txt.strip() else None
+        common = Counter(txt.split()).most_common(10)
         
-        return df, wc, common, top_media
+        return df, wc, common
     except:
-        return None, None, None, None
+        return None, None, None
 
 # --- UI STREAMLIT ---
-st.markdown("## 💹 Analisis Sentimen & Pergerakan Saham")
+st.set_page_config(page_title="Analisis Saham & Sentimen", layout="wide")
+st.markdown("## 📊 Dashboard Analisis Saham (Alpha Vantage API)")
 
+# Sidebar
 st.sidebar.header("⚙️ Konfigurasi")
-ticker = st.sidebar.text_input("Simbol Saham:", value="BBCA.JK")
-keyword = st.sidebar.text_input("Kata Kunci:", value="Bank Central Asia")
+ticker_input = st.sidebar.text_input("Ticker Saham (Contoh: BBCA.JK atau IDX:BBCA):", value="BBCA.JK")
+keyword = st.sidebar.text_input("Kata Kunci Berita:", value="Bank Central Asia")
 
 c1, c2 = st.sidebar.columns(2)
-start_date = c1.date_input("Mulai:", datetime.now() - timedelta(days=14))
-end_date = c2.date_input("Selesai:", datetime.now())
+start_d = c1.date_input("Mulai", datetime.now() - timedelta(days=20))
+end_d = c2.date_input("Selesai", datetime.now())
 
 if st.sidebar.button("🚀 Jalankan Analisis"):
-    s_str, e_str = start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    s_str, e_str = start_d.strftime("%Y-%m-%d"), end_d.strftime("%Y-%m-%d")
     
-    with st.spinner("Mengambil data..."):
-        df_stock = get_stock_data(ticker, s_str, e_str)
-        df_news, wc, common, media = crawl_and_analyze(keyword, s_str, e_str)
+    with st.spinner("Menarik data dari API Resmi..."):
+        df_s = get_stock_data_av(ticker_input, s_str, e_str)
+        df_n, wc, common = crawl_news(keyword, s_str, e_str)
 
-        t1, t2, t3 = st.tabs(["📉 Saham", "📰 Berita", "🔠 Kata"])
+        tab1, tab2 = st.tabs(["📉 Grafik & Data Saham", "📰 Berita & WordCloud"])
 
-        with t1:
-            if df_stock is not None and not df_stock.empty:
-                st.subheader(f"Data Harga {ticker}")
-                st.dataframe(df_stock[['Prev_Close', 'Close', 'Price_Change', 'Pct_Change (%)']].style.format("{:.2f}"))
-                st.line_chart(df_stock['Close'])
+        with tab1:
+            if df_s is not None and not df_s.empty:
+                st.subheader(f"Statistik Harga {ticker_input}")
+                show_cols = ['Prev_Close', 'Close', 'Price_Change', 'Pct_Change (%)']
+                st.dataframe(df_s[show_cols].style.format("{:.2f}"), use_container_width=True)
+                st.line_chart(df_s['Close'])
             else:
-                st.error("Server Yahoo memblokir permintaan. Coba mundurkan tanggal atau tunggu beberapa menit.")
+                st.error("Data tidak ditemukan. Tips: Alpha Vantage mungkin butuh format 'IDX:BBCA' untuk beberapa saham Indonesia.")
 
-        with t2:
-            if df_news is not None:
+        with tab2:
+            if df_n is not None:
+                st.subheader("Daftar Berita")
                 st.dataframe(df_news[['date', 'title', 'media', 'link']], use_container_width=True)
+                if wc:
+                    st.subheader("Visualisasi Kata (WordCloud)")
+                    fig, ax = plt.subplots()
+                    ax.imshow(wc, interpolation="bilinear"); ax.axis("off")
+                    st.pyplot(fig)
             else:
-                st.warning("Berita tidak ditemukan.")
-
-        with t3:
-            if common:
-                st.table(pd.DataFrame(common, columns=["Kata", "Jumlah"]))
+                st.warning("Berita tidak ditemukan untuk rentang tanggal tersebut.")
