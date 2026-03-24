@@ -19,7 +19,7 @@ except:
     ALPHA_OK = False
 
 # ================= CONFIG =================
-AV_API_KEY = "ISI_API_KEY_KAMU"
+AV_API_KEY = "YQNUKAH419JA2RYV"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 factory = StopWordRemoverFactory()
@@ -35,7 +35,6 @@ def smart_keyword(keyword, ticker):
     keyword = str(keyword).replace("\n", " ").replace("\r", " ")
     keyword = " ".join(keyword.split())
 
-    # rekomendasi otomatis
     suggestions = [
         keyword,
         f"saham {keyword}",
@@ -64,12 +63,15 @@ def preprocess_text(text):
     return stopword.remove(text)
 
 # ================= YAHOO SAFE =================
-def get_yahoo_safe(symbol, start, end):
+def get_yahoo_safe(symbol, start, end, is_indo=True):
 
     def to_unix(d):
         return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
 
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.JK"
+    # Tambahkan .JK hanya untuk saham Indonesia
+    yahoo_symbol = f"{symbol}.JK" if is_indo else symbol
+
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
 
     try:
         r = requests.get(url, headers=HEADERS, params={
@@ -97,11 +99,14 @@ def get_yahoo_safe(symbol, start, end):
 
         df = pd.DataFrame(rows)
 
-        kurs = get_kurs()
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
-        df['Close_IDR'] = df['Close'] * kurs
+
+        # HANYA GLOBAL → ADA IDR
+        if not is_indo:
+            kurs = get_kurs()
+            df['Close_IDR'] = df['Close'] * kurs
 
         return df
 
@@ -127,6 +132,7 @@ def get_alpha(symbol, start, end):
         df['Date'] = pd.to_datetime(df['Date']).dt.date
 
         kurs = get_kurs()
+
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
@@ -137,7 +143,7 @@ def get_alpha(symbol, start, end):
     except:
         return None
 
-# ================= NEWS FULL =================
+# ================= NEWS =================
 @st.cache_data(ttl=300)
 def get_news_full(encoded_keyword, start, end):
 
@@ -184,11 +190,12 @@ def color(val):
     return "color: green" if val > 0 else "color: red"
 
 # ================= UI =================
-st.title("💹 Dashboard Saham + Analisis Berita (Smart System)")
+st.title("💹 Analisis Sentimen Berita Ekonomi pada Google News dan Pengaruhnya terhadap Volatilitas serta Pergerakan Intraday Harga Saham")
 
-source = st.selectbox("Sumber Saham", ["Yahoo (IDX)", "Alpha (Global)"])
+market = st.selectbox("Jenis Saham", ["Indonesia (IDX)", "Luar Negeri (Global)"])
+source = st.selectbox("Sumber Data", ["Yahoo (Safe)", "Alpha Vantage"])
+
 ticker = st.text_input("Ticker", "BBCA")
-
 keyword_input = st.text_input("Keyword Berita (opsional)", "")
 
 keyword_clean, suggestions, encoded_keyword = smart_keyword(keyword_input, ticker)
@@ -202,9 +209,11 @@ end = c2.date_input("End", datetime.now())
 
 if st.button("🚀 Jalankan Analisis"):
 
+    is_indo = True if "Indonesia" in market else False
+
     # SAHAM
-    if source == "Yahoo (IDX)":
-        df_s = get_yahoo_safe(ticker, start, end)
+    if source == "Yahoo (Safe)":
+        df_s = get_yahoo_safe(ticker, start, end, is_indo)
     else:
         df_s = get_alpha(ticker, start, end)
 
@@ -217,9 +226,14 @@ if st.button("🚀 Jalankan Analisis"):
 
         st.subheader("📊 Data Saham + Berita")
 
-        cols = ['Date','Prev_Close','Close','Close_IDR','Price_Change','Pct_Change (%)','title']
+        # KOLOM DINAMIS
+        base_cols = ['Date','Prev_Close','Close']
+        if not is_indo:
+            base_cols.append('Close_IDR')
 
-        styled = df_merge[cols].style.format({
+        base_cols += ['Price_Change','Pct_Change (%)','title']
+
+        styled = df_merge[base_cols].style.format({
             "Prev_Close": "{:.2f}",
             "Close": "{:.2f}",
             "Close_IDR": "Rp {:,.0f}",
@@ -229,10 +243,13 @@ if st.button("🚀 Jalankan Analisis"):
 
         st.dataframe(styled, use_container_width=True)
 
-        st.subheader("📈 Grafik Harga (Rupiah)")
-        st.line_chart(df_merge.set_index("Date")["Close_IDR"])
+        st.subheader("📈 Grafik Harga")
+        if not is_indo:
+            st.line_chart(df_merge.set_index("Date")["Close_IDR"])
+        else:
+            st.line_chart(df_merge.set_index("Date")["Close"])
 
-        # ================= ANALISIS BERITA =================
+        # ================= BERITA =================
         st.subheader("📰 Analisis Berita")
 
         if wc:
