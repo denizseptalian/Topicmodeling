@@ -9,6 +9,8 @@ scikit-learn==1.4.2
 altair==5.2.0
 yfinance==0.2.37
 feedparser==6.0.11
+tensorflow
+scikit-learn
 alpha_vantage
 beautifulsoup4
 requests
