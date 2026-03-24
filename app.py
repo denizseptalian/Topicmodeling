@@ -9,47 +9,69 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 import re
 from datetime import datetime, timedelta
 import feedparser
+import time
 
 # =========================
-# STOPWORD
+# CONFIG
 # =========================
+st.set_page_config(layout="wide")
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
 
 # =========================
-# PREPROCESSING
+# PREPROCESS
 # =========================
 def preprocess_text(text):
-    if pd.isna(text):
+    try:
+        if pd.isna(text):
+            return ""
+        text = str(text).lower()
+        text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+        return stopword.remove(text)
+    except:
         return ""
-    text = str(text).lower()
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-    return stopword.remove(text)
 
 # =========================
-# YAHOO FINANCE (SOLUSI 1)
+# SMART STOCK FETCH (ANTI BLOCK)
 # =========================
-def get_stock_data_yf(ticker, start_date, end_date):
+@st.cache_data(ttl=300)  # cache 5 menit
+def get_stock_data_safe(ticker, start_date, end_date):
     try:
-        # Tambah .JK otomatis
         ticker_jk = ticker if ticker.endswith(".JK") else ticker + ".JK"
 
-        # TRY 1 → pakai .JK
-        stock = yf.Ticker(ticker_jk)
-        df = stock.history(start=start_date, end=end_date)
+        df = None
 
-        # TRY 2 → fallback tanpa .JK
-        if df.empty:
-            stock = yf.Ticker(ticker)
-            df = stock.history(start=start_date, end=end_date)
+        # ===== TRY 1: Yahoo normal =====
+        for i in range(3):
+            try:
+                time.sleep(1)  # anti bot
+                stock = yf.Ticker(ticker_jk)
+                df = stock.history(start=start_date, end=end_date)
 
-        if df.empty:
-            st.error("❌ Data saham tidak ditemukan di Yahoo Finance")
+                if df is not None and not df.empty:
+                    break
+            except:
+                continue
+
+        # ===== TRY 2: fallback tanpa .JK =====
+        if df is None or df.empty:
+            for i in range(2):
+                try:
+                    time.sleep(1)
+                    stock = yf.Ticker(ticker)
+                    df = stock.history(start=start_date, end=end_date)
+
+                    if df is not None and not df.empty:
+                        break
+                except:
+                    continue
+
+        if df is None or df.empty:
             return None
 
         df = df.reset_index()
 
-        # Feature tambahan
+        # Feature engineering
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
@@ -57,13 +79,14 @@ def get_stock_data_yf(ticker, start_date, end_date):
         return df
 
     except Exception as e:
-        st.error(f"Error Yahoo Finance: {e}")
+        st.error(f"Error saham: {e}")
         return None
 
 # =========================
-# NEWS RSS (STABIL)
+# NEWS RSS (STABLE)
 # =========================
-def crawl_news_rss(keyword):
+@st.cache_data(ttl=300)
+def crawl_news_safe(keyword):
     try:
         url = f"https://news.google.com/rss/search?q={keyword.replace(' ', '%20')}&hl=id&gl=ID&ceid=ID:id"
         feed = feedparser.parse(url)
@@ -102,10 +125,9 @@ def crawl_news_rss(keyword):
         return None, None, None, None
 
 # =========================
-# STREAMLIT UI
+# UI
 # =========================
-st.set_page_config(layout="wide")
-st.title("💹 Dashboard Saham & Berita (Yahoo FIX)")
+st.title("💹 Dashboard Saham & Berita (ANTI BLOCK SYSTEM)")
 
 # Sidebar
 st.sidebar.header("⚙️ Pengaturan")
@@ -117,12 +139,13 @@ c1, c2 = st.sidebar.columns(2)
 start_d = c1.date_input("Mulai", datetime.now() - timedelta(days=30))
 end_d = c2.date_input("Selesai", datetime.now())
 
-if st.sidebar.button("🚀 Jalankan"):
+# BUTTON (tidak auto run)
+if st.sidebar.button("🚀 Jalankan Analisis"):
 
-    with st.spinner("Mengambil data..."):
+    with st.spinner("Mengambil data dengan sistem anti-block..."):
 
-        df_s = get_stock_data_yf(ticker, start_d, end_d)
-        df_n, wc, common, media = crawl_news_rss(keyword)
+        df_s = get_stock_data_safe(ticker, start_d, end_d)
+        df_n, wc, common, media = crawl_news_safe(keyword)
 
         tab1, tab2 = st.tabs(["📉 Saham", "📰 Berita"])
 
@@ -140,11 +163,11 @@ if st.sidebar.button("🚀 Jalankan"):
                     use_container_width=True
                 )
 
-                st.subheader("📈 Grafik Close")
+                st.subheader("📈 Grafik Harga Close")
                 st.line_chart(df_s.set_index("Date")['Close'])
 
             else:
-                st.warning("⚠️ Data saham tidak tersedia")
+                st.warning("⚠️ Yahoo Finance gagal (kemungkinan diblok / data tidak tersedia)")
 
         # =========================
         # BERITA
