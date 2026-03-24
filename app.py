@@ -9,10 +9,9 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 import re
 from datetime import datetime, timedelta
 import feedparser
-import time
 
 # =========================
-# INIT
+# STOPWORD
 # =========================
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
@@ -21,51 +20,36 @@ stopword = factory.create_stop_word_remover()
 # PREPROCESSING
 # =========================
 def preprocess_text(text):
-    try:
-        if pd.isna(text):
-            return ""
-        text = str(text).lower()
-        text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-        return stopword.remove(text)
-    except:
+    if pd.isna(text):
         return ""
+    text = str(text).lower()
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    return stopword.remove(text)
 
 # =========================
-# YAHOO FINANCE (SUPER SAFE)
+# YAHOO FINANCE (SOLUSI 1)
 # =========================
 def get_stock_data_yf(ticker, start_date, end_date):
     try:
-        # Auto tambahkan .JK
-        if not ticker.endswith(".JK"):
-            ticker = ticker + ".JK"
+        # Tambah .JK otomatis
+        ticker_jk = ticker if ticker.endswith(".JK") else ticker + ".JK"
 
-        df = None
+        # TRY 1 → pakai .JK
+        stock = yf.Ticker(ticker_jk)
+        df = stock.history(start=start_date, end=end_date)
 
-        # RETRY 3x (anti error Yahoo)
-        for i in range(3):
-            try:
-                df = yf.download(
-                    ticker,
-                    start=start_date,
-                    end=end_date,
-                    progress=False,
-                    threads=False
-                )
+        # TRY 2 → fallback tanpa .JK
+        if df.empty:
+            stock = yf.Ticker(ticker)
+            df = stock.history(start=start_date, end=end_date)
 
-                if df is not None and not df.empty:
-                    break
-
-            except Exception as e:
-                time.sleep(1)
-
-        if df is None or df.empty:
-            st.error("❌ Data saham tidak ditemukan (Yahoo error / ticker salah)")
+        if df.empty:
+            st.error("❌ Data saham tidak ditemukan di Yahoo Finance")
             return None
 
-        # Reset index biar aman
         df = df.reset_index()
 
-        # Feature engineering
+        # Feature tambahan
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
@@ -77,7 +61,7 @@ def get_stock_data_yf(ticker, start_date, end_date):
         return None
 
 # =========================
-# NEWS RSS (100% WORK)
+# NEWS RSS (STABIL)
 # =========================
 def crawl_news_rss(keyword):
     try:
@@ -114,14 +98,14 @@ def crawl_news_rss(keyword):
         return df, wordcloud, common, top_media
 
     except Exception as e:
-        st.error(f"Error news RSS: {e}")
+        st.error(f"Error news: {e}")
         return None, None, None, None
 
 # =========================
 # STREAMLIT UI
 # =========================
 st.set_page_config(layout="wide")
-st.title("💹 Dashboard Saham & Berita (SUPER STABLE)")
+st.title("💹 Dashboard Saham & Berita (Yahoo FIX)")
 
 # Sidebar
 st.sidebar.header("⚙️ Pengaturan")
@@ -156,7 +140,7 @@ if st.sidebar.button("🚀 Jalankan"):
                     use_container_width=True
                 )
 
-                st.subheader("📈 Grafik Harga Close")
+                st.subheader("📈 Grafik Close")
                 st.line_chart(df_s.set_index("Date")['Close'])
 
             else:
