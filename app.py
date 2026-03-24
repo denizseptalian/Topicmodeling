@@ -23,7 +23,7 @@ except:
     ALPHA_OK = False
 
 # ================= CONFIG =================
-AV_API_KEY = "ISI_API_KEY_KAMU"
+AV_API_KEY = "YQNUKAH419JA2RYV"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 factory = StopWordRemoverFactory()
@@ -234,7 +234,7 @@ def color(val):
     return "color: green" if val>0 else "color: red"
 
 # ================= UI =================
-st.title("💹 Dashboard Saham + AI Sentiment + Prediksi")
+st.title("💹 Analisis Sentimen Berita Ekonomi pada Google News dan Pengaruhnya terhadap Volatilitas serta Pergerakan Intraday Harga Saham")
 
 market = st.selectbox("Jenis Saham", ["Indonesia (IDX)", "Global"])
 source = st.selectbox("Sumber Data", ["Yahoo", "Alpha"])
