@@ -174,7 +174,6 @@ def get_news(keyword_encoded, start, end):
 
     df["doc"] = (df["title"]+" "+df["desc"]).apply(preprocess_text)
 
-    # SENTIMENT
     df["sentiment_score"] = df["doc"].apply(sentiment_score)
     df["sentiment_label"] = df["sentiment_score"].apply(sentiment_label)
 
@@ -190,7 +189,6 @@ def get_news(keyword_encoded, start, end):
     df_daily = df.groupby("date")["title"].apply(lambda x:" | ".join(x)).reset_index()
     df_daily.rename(columns={"date":"Date"}, inplace=True)
 
-    # sentiment harian
     sent_daily = df.groupby("date")["sentiment_score"].mean().reset_index()
     sent_daily.rename(columns={"date":"Date","sentiment_score":"Sentiment"}, inplace=True)
 
@@ -263,7 +261,7 @@ if st.button("RUN"):
     df_news, df_daily, wc, common, media = get_news(kw_encoded,start,end)
 
     if df_s is None or df_daily is None:
-        st.error("Data gagal")
+        st.error("Data gagal diambil")
         st.stop()
 
     df_merge = pd.merge(df_s, df_daily, on="Date", how="left")
@@ -276,19 +274,16 @@ if st.button("RUN"):
     styled = df_merge[cols].style.applymap(color, subset=['Price_Change','Pct_Change (%)'])
 
     format_dict = {
-    "Prev_Close": "{:.2f}",
-    "Close": "{:.2f}",
-    "Price_Change": "{:.2f}",
-    "Pct_Change (%)": "{:.2f}"
-     }
+        "Prev_Close": "{:.2f}",
+        "Close": "{:.2f}",
+        "Price_Change": "{:.2f}",
+        "Pct_Change (%)": "{:.2f}"
+    }
 
     if "Close_IDR" in df_merge.columns:
-    format_dict["Close_IDR"] = "Rp {:,.2f}"
+        format_dict["Close_IDR"] = "Rp {:,.2f}"
 
-    st.dataframe(
-    styled.format(format_dict),
-    use_container_width=True
-    )
+    st.dataframe(styled.format(format_dict), use_container_width=True)
 
     # ================= GRAFIK =================
     st.subheader("📈 Harga")
@@ -304,25 +299,31 @@ if st.button("RUN"):
         ax.plot(df_pred['Date'], df_pred['Prediksi'], label="Prediksi")
         ax.legend()
         st.pyplot(fig)
+    else:
+        st.warning("Data tidak cukup untuk prediksi")
 
-    # ================= BERITA =================
-    st.subheader("📰 WordCloud")
+    # ================= WORDCLOUD =================
+    st.subheader("☁️ WordCloud")
     if wc:
         fig, ax = plt.subplots()
         ax.imshow(wc)
         ax.axis("off")
         st.pyplot(fig)
 
+    # ================= TOP WORD =================
     st.subheader("📊 Top Kata")
     if common:
         st.table(pd.DataFrame(common, columns=["Kata","Jumlah"]))
 
+    # ================= MEDIA =================
     st.subheader("🏆 Top Media")
     if not media.empty:
-        st.table(media.reset_index())
+        st.table(media.reset_index().rename(columns={"index":"Media"}))
 
+    # ================= SENTIMENT =================
     st.subheader("📊 Distribusi Sentiment")
     st.bar_chart(df_news['sentiment_label'].value_counts())
 
-    st.subheader("📄 Data Berita")
+    # ================= NEWS =================
+    st.subheader("📰 Data Berita")
     st.dataframe(df_news)
