@@ -11,7 +11,9 @@ import re
 from datetime import datetime, timedelta
 import logging
 
-# --- KONFIGURASI ---
+# =========================
+# CONFIG
+# =========================
 AV_API_KEY = "CYJG0OMG7PWSU1V9"
 
 # Stopword
@@ -29,7 +31,7 @@ def preprocess_text(text):
     return stopword.remove(text)
 
 # =========================
-# SAHAM (ALPHA VANTAGE)
+# STOCK DATA
 # =========================
 def get_stock_data_av(ticker, start_date, end_date):
     try:
@@ -43,32 +45,31 @@ def get_stock_data_av(ticker, start_date, end_date):
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
 
-        df.index = pd.to_datetime(df.index).strftime('%Y-%m-%d')
-        df_filtered = df.loc[(df.index >= start_date) & (df.index <= end_date)]
+        df.index = pd.to_datetime(df.index)
+        df = df.loc[(df.index >= start_date) & (df.index <= end_date)]
 
-        return df_filtered
+        return df
 
     except Exception as e:
-        st.sidebar.error(f"Error: {e}")
+        st.error(f"Error saham: {e}")
         return None
 
 # =========================
-# NEWS + ANALYSIS (BARU)
+# NEWS CRAWLING (FIXED)
 # =========================
-def crawl_and_analyze(keyword, start_date, end_date):
+def crawl_and_analyze(keyword):
 
-    googlenews = GoogleNews(lang='id', region='ID')
-    search_q = f"{keyword} after:{start_date} before:{end_date}"
-    googlenews.search(search_q)
+    googlenews = GoogleNews(lang='id')  # lebih stabil tanpa region
+    googlenews.search(keyword)
 
     data_to_append = []
 
-    for i in range(1, 6):
+    for i in range(1, 4):  # max 3 page biar stabil
         try:
             googlenews.getpage(i)
             news = googlenews.results()
 
-            if len(news) == 0:
+            if not news:
                 continue
 
             df_temp = pd.DataFrame(news)
@@ -79,62 +80,58 @@ def crawl_and_analyze(keyword, start_date, end_date):
         except Exception as e:
             logging.warning(f"Gagal page {i}: {e}")
 
-    if len(data_to_append) == 0:
+    if not data_to_append:
         return None, None, None, None
 
     df = pd.concat(data_to_append, ignore_index=True)
 
-    df["title"] = df["title"].fillna("") if "title" in df else ""
-    df["desc"] = df["desc"].fillna("") if "desc" in df else ""
+    # Safe column handling
+    df["title"] = df.get("title", "").fillna("")
+    df["desc"] = df.get("desc", "").fillna("")
 
+    # TEXT PROCESS
     df["document"] = (df["title"] + " " + df["desc"]).apply(preprocess_text)
 
     long_string = " ".join(df["document"].values)
 
-    wordcloud = None
-    most_common_words = None
+    wordcloud, most_common_words = None, None
 
-    if long_string.strip() != "":
+    if long_string.strip():
         wordcloud = WordCloud(background_color="white").generate(long_string)
-        words = long_string.split()
-        most_common_words = Counter(words).most_common(10)
+        most_common_words = Counter(long_string.split()).most_common(10)
 
     # MEDIA ANALYSIS
-    if "media" in df.columns:
-        top_media = df["media"].value_counts().head(10)
-    elif "site" in df.columns:
-        top_media = df["site"].value_counts().head(10)
-    else:
-        top_media = pd.Series()
+    media_col = "media" if "media" in df.columns else "site" if "site" in df.columns else None
+    top_media = df[media_col].value_counts().head(10) if media_col else pd.Series()
 
     return df, wordcloud, most_common_words, top_media
 
 # =========================
-# UI STREAMLIT
+# STREAMLIT UI
 # =========================
 st.set_page_config(page_title="Dashboard Saham & Berita", layout="wide")
 
-st.title("💹 Dashboard Saham + Analisis Berita")
+st.title("💹 Dashboard Analisis Saham & Berita")
 
 # Sidebar
 st.sidebar.header("⚙️ Pengaturan")
 
 ticker = st.sidebar.text_input("Ticker Saham", "BBCA")
-keyword = st.sidebar.text_input("Keyword Berita", "Bank Central Asia")
+keyword = st.sidebar.text_input("Keyword Berita", "Bank BCA")
 
 c1, c2 = st.sidebar.columns(2)
 start_d = c1.date_input("Mulai", datetime.now() - timedelta(days=20))
 end_d = c2.date_input("Selesai", datetime.now())
 
-if st.sidebar.button("🚀 Jalankan"):
+if st.sidebar.button("🚀 Jalankan Analisis"):
 
-    s_str = start_d.strftime("%Y-%m-%d")
-    e_str = end_d.strftime("%Y-%m-%d")
+    with st.spinner("Mengambil data..."):
 
-    with st.spinner("Processing..."):
+        # STOCK
+        df_s = get_stock_data_av(ticker, start_d, end_d)
 
-        df_s = get_stock_data_av(ticker, s_str, e_str)
-        df_n, wc, common, media = crawl_and_analyze(keyword, s_str, e_str)
+        # NEWS
+        df_n, wc, common, media = crawl_and_analyze(keyword)
 
         tab1, tab2 = st.tabs(["📉 Saham", "📰 Berita"])
 
@@ -144,14 +141,18 @@ if st.sidebar.button("🚀 Jalankan"):
         with tab1:
             if df_s is not None and not df_s.empty:
 
-                st.subheader("Data Harga")
-                st.dataframe(df_s)
+                st.subheader("Data Harga Saham")
+                st.dataframe(
+                    df_s[['Prev_Close', 'Close', 'Price_Change', 'Pct_Change (%)']]
+                    .style.format("{:.2f}"),
+                    use_container_width=True
+                )
 
-                st.subheader("Grafik Close")
-                st.line_chart(df_s["Close"])
+                st.subheader("Grafik Harga Close")
+                st.line_chart(df_s['Close'])
 
             else:
-                st.error("Data saham tidak ditemukan")
+                st.error("❌ Data saham tidak ditemukan")
 
         # =========================
         # TAB BERITA
@@ -160,25 +161,31 @@ if st.sidebar.button("🚀 Jalankan"):
             if df_n is not None:
 
                 st.subheader("Data Berita")
-                st.dataframe(df_n[['date','title','media','link']], use_container_width=True)
+                st.write(f"Jumlah berita ditemukan: {len(df_n)}")
+
+                cols = [c for c in ['date', 'title', 'media', 'link'] if c in df_n.columns]
+                st.dataframe(df_n[cols], use_container_width=True)
 
                 # WORDCLOUD
                 if wc:
-                    st.subheader("WordCloud")
-                    fig, ax = plt.subplots()
+                    st.subheader("☁️ WordCloud")
+                    fig, ax = plt.subplots(figsize=(10,5))
                     ax.imshow(wc)
                     ax.axis("off")
                     st.pyplot(fig)
 
-                # MOST COMMON WORDS
+                # TOP WORDS
                 if common:
-                    st.subheader("Top 10 Kata")
-                    st.table(pd.DataFrame(common, columns=["Kata","Jumlah"]))
+                    st.subheader("📌 10 Kata Teratas")
+                    st.table(pd.DataFrame(common, columns=["Kata", "Jumlah"]))
 
                 # TOP MEDIA
                 if not media.empty:
-                    st.subheader("Top Media")
-                    st.table(media.reset_index().rename(columns={"index":"Media", 0:"Jumlah"}))
+                    st.subheader("🏆 Media Teraktif")
+                    st.table(
+                        media.reset_index()
+                        .rename(columns={"index":"Media", 0:"Jumlah"})
+                    )
 
             else:
-                st.warning("Tidak ada berita ditemukan")
+                st.warning("⚠️ Berita tidak ditemukan (coba keyword lain)")
