@@ -11,11 +11,12 @@ import re
 from datetime import datetime, timedelta
 import feedparser
 import time
+import requests
 
 # =========================
 # CONFIG
 # =========================
-AV_API_KEY = "YQNUKAH419JA2RYVU"
+AV_API_KEY = "YQNUKAH419JA2RYV"
 
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
@@ -23,33 +24,40 @@ stopword = factory.create_stop_word_remover()
 st.set_page_config(layout="wide")
 
 # =========================
+# GET KURS REAL-TIME
+# =========================
+@st.cache_data(ttl=3600)
+def get_kurs_usd_idr():
+    try:
+        url = "https://api.exchangerate.host/latest?base=USD&symbols=IDR"
+        res = requests.get(url).json()
+        return res['rates']['IDR']
+    except:
+        return 15500  # fallback
+
+# =========================
 # PREPROCESS
 # =========================
 def preprocess_text(text):
-    try:
-        if pd.isna(text):
-            return ""
-        text = str(text).lower()
-        text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-        return stopword.remove(text)
-    except:
+    if pd.isna(text):
         return ""
+    text = str(text).lower()
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    return stopword.remove(text)
 
 # =========================
-# NORMALIZE DATAFRAME (ANTI ERROR)
+# NORMALIZE DATA
 # =========================
 def normalize_stock_df(df):
     if df is None or df.empty:
         return None
 
-    df = df.copy()
-
-    # Reset index biar aman
     df = df.reset_index()
 
-    # Pastikan ada kolom Date
     if 'Date' not in df.columns:
         df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
+
+    df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
 
     return df
 
@@ -60,20 +68,16 @@ def normalize_stock_df(df):
 def get_yahoo(ticker, start, end):
     try:
         ticker_jk = ticker if ticker.endswith(".JK") else ticker + ".JK"
-
         time.sleep(1)
         df = yf.Ticker(ticker_jk).history(start=start, end=end)
-
-        if df is None or df.empty:
+        if df.empty:
             return None
-
         return normalize_stock_df(df)
-
     except:
         return None
 
 # =========================
-# ALPHA VANTAGE
+# ALPHA
 # =========================
 @st.cache_data(ttl=300)
 def get_alpha(ticker, start, end):
@@ -84,10 +88,7 @@ def get_alpha(ticker, start, end):
         df = data.rename(columns={'4. close': 'Close'})
         df.index = pd.to_datetime(df.index)
 
-        start = pd.to_datetime(start)
-        end = pd.to_datetime(end)
-
-        df = df.loc[(df.index >= start) & (df.index <= end)]
+        df = df.loc[(df.index >= pd.to_datetime(start)) & (df.index <= pd.to_datetime(end))]
 
         if df.empty:
             return None
@@ -105,78 +106,82 @@ def get_stock_data(source, ticker, start, end):
     if source == "Yahoo Finance":
         df = get_yahoo(ticker, start, end)
         if df is None:
-            st.warning("⚠️ Yahoo gagal → fallback ke Alpha")
+            st.warning("⚠️ Yahoo gagal → fallback Alpha")
             df = get_alpha(ticker, start, end)
     else:
         df = get_alpha(ticker, start, end)
         if df is None:
-            st.warning("⚠️ Alpha gagal → fallback ke Yahoo")
+            st.warning("⚠️ Alpha gagal → fallback Yahoo")
             df = get_yahoo(ticker, start, end)
 
     if df is None:
         return None
 
-    # Feature tambahan
-    if 'Close' in df.columns:
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Price_Change'] = df['Close'] - df['Prev_Close']
-        df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
+    kurs = get_kurs_usd_idr()
+
+    df['Prev_Close'] = df['Close'].shift(1)
+    df['Price_Change'] = df['Close'] - df['Prev_Close']
+    df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
+
+    # KONVERSI RUPIAH
+    df['Close_IDR'] = df['Close'] * kurs
 
     return df
 
 # =========================
-# NEWS FULL
+# STYLE WARNA
+# =========================
+def highlight_change(val):
+    if pd.isna(val):
+        return ""
+    if val > 0:
+        return "color: green"
+    elif val < 0:
+        return "color: red"
+    return ""
+
+# =========================
+# NEWS
 # =========================
 @st.cache_data(ttl=300)
 def crawl_news(keyword):
-    try:
-        url = f"https://news.google.com/rss/search?q={keyword.replace(' ', '%20')}&hl=id&gl=ID&ceid=ID:id"
-        feed = feedparser.parse(url)
+    url = f"https://news.google.com/rss/search?q={keyword.replace(' ', '%20')}&hl=id&gl=ID&ceid=ID:id"
+    feed = feedparser.parse(url)
 
-        if not feed.entries:
-            return None, None, None, None
-
-        data = []
-
-        for entry in feed.entries:
-            data.append({
-                "title": entry.title,
-                "link": entry.link,
-                "published": entry.get("published", ""),
-                "source": entry.get("source", {}).get("title", "")
-            })
-
-        df = pd.DataFrame(data)
-
-        df["document"] = df["title"].apply(preprocess_text)
-
-        text = " ".join(df["document"])
-
-        wordcloud, common = None, None
-
-        if text.strip():
-            wordcloud = WordCloud(background_color="white").generate(text)
-            common = Counter(text.split()).most_common(10)
-
-        top_media = df["source"].value_counts().head(10)
-
-        return df, wordcloud, common, top_media
-
-    except:
+    if not feed.entries:
         return None, None, None, None
+
+    data = []
+    for e in feed.entries:
+        data.append({
+            "title": e.title,
+            "link": e.link,
+            "published": e.get("published", ""),
+            "source": e.get("source", {}).get("title", "")
+        })
+
+    df = pd.DataFrame(data)
+    df["doc"] = df["title"].apply(preprocess_text)
+
+    text = " ".join(df["doc"])
+
+    wc, common = None, None
+    if text.strip():
+        wc = WordCloud(background_color="white").generate(text)
+        common = Counter(text.split()).most_common(10)
+
+    media = df["source"].value_counts().head(10)
+
+    return df, wc, common, media
 
 # =========================
 # UI
 # =========================
-st.title("💹 Dashboard Saham & Berita (ANTI ERROR FINAL)")
+st.title("💹 Dashboard Saham & Berita (PRO MAX)")
 
 st.sidebar.header("⚙️ Pengaturan")
 
-source = st.sidebar.selectbox(
-    "Sumber Data Saham",
-    ["Yahoo Finance", "Alpha Vantage"]
-)
-
+source = st.sidebar.selectbox("Sumber Data", ["Yahoo Finance", "Alpha Vantage"])
 ticker = st.sidebar.text_input("Ticker", "BBCA")
 keyword = st.sidebar.text_input("Keyword Berita", "Bank BCA")
 
@@ -191,44 +196,42 @@ if st.sidebar.button("🚀 Jalankan"):
 
     tab1, tab2 = st.tabs(["📉 Saham", "📰 Berita"])
 
-    # =========================
-    # SAHAM
-    # =========================
+    # ================= SAHAM =================
     with tab1:
         if df_s is not None:
 
             st.success(f"✅ Data saham: {len(df_s)}")
 
-            # SAFE COLUMN
-            cols = [c for c in ['Date','Close','Prev_Close','Price_Change','Pct_Change (%)'] if c in df_s.columns]
+            cols = ['Date','Prev_Close','Close','Close_IDR','Price_Change','Pct_Change (%)']
+            cols = [c for c in cols if c in df_s.columns]
 
-            st.dataframe(
-                df_s[cols].style.format("{:.2f}"),
-                use_container_width=True
-            )
+            styled = df_s[cols].style.format({
+                "Prev_Close": "{:.2f}",
+                "Close": "{:.2f}",
+                "Close_IDR": "Rp {:,.0f}",
+                "Price_Change": "{:.2f}",
+                "Pct_Change (%)": "{:.2f}"
+            }).applymap(highlight_change, subset=['Price_Change','Pct_Change (%)'])
 
-            # SAFE CHART
-            if 'Date' in df_s.columns:
-                st.line_chart(df_s.set_index('Date')['Close'])
-            else:
-                st.line_chart(df_s['Close'])
+            st.dataframe(styled, use_container_width=True)
+
+            # GRAFIK RUPIAH
+            st.subheader("📈 Grafik Harga (Rupiah)")
+            st.line_chart(df_s.set_index("Date")["Close_IDR"])
 
         else:
-            st.error("❌ Semua sumber gagal")
+            st.error("❌ Semua source gagal")
 
-    # =========================
-    # BERITA
-    # =========================
+    # ================= BERITA =================
     with tab2:
         if df_n is not None:
 
             st.success(f"✅ Berita ditemukan: {len(df_n)}")
-
             st.dataframe(df_n, use_container_width=True)
 
             if wc:
                 st.subheader("☁️ WordCloud")
-                fig, ax = plt.subplots(figsize=(10,5))
+                fig, ax = plt.subplots()
                 ax.imshow(wc)
                 ax.axis("off")
                 st.pyplot(fig)
