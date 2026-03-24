@@ -142,7 +142,7 @@ def color_change(val):
     return "color: green" if val > 0 else "color: red"
 
 # ================= UI =================
-st.title("💹 Analisis Saham + Berita (MERGE HARIAN)")
+st.title("💹 Analisis Sentimen Berita Ekonomi pada Google News dan Pengaruhnya terhadap Volatilitas serta Pergerakan Intraday Harga Saham")
 
 source = st.sidebar.selectbox("Sumber Saham", ["Yahoo Finance", "Alpha Vantage"])
 ticker = st.sidebar.text_input("Ticker", "BBCA")
