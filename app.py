@@ -33,7 +33,7 @@ st.set_page_config(layout="wide")
 
 # ================= SMART KEYWORD =================
 def smart_keyword(keyword, ticker):
-    if not keyword or keyword.strip() == "":
+    if not keyword or keyword.strip()=="":
         keyword = ticker
 
     keyword = str(keyword).replace("\n"," ").replace("\r"," ")
@@ -66,23 +66,21 @@ def preprocess_text(text):
     return stopword.remove(text)
 
 # ================= SENTIMENT =================
-positive_words = {"naik","untung","laba","positif","menguat","tumbuh","baik"}
-negative_words = {"turun","rugi","negatif","melemah","anjlok","buruk"}
+pos_words = {"naik","laba","untung","positif","menguat","tumbuh"}
+neg_words = {"turun","rugi","anjlok","negatif","melemah","buruk"}
 
 def sentiment_score(text):
-    score = 0
+    s=0
     for w in text.split():
-        if w in positive_words: score += 1
-        if w in negative_words: score -= 1
-    return score
+        if w in pos_words: s+=1
+        if w in neg_words: s-=1
+    return s
 
-def sentiment_label(score):
-    if score > 0: return "Positif"
-    if score < 0: return "Negatif"
-    return "Netral"
+def sentiment_label(s):
+    return "Positif" if s>0 else "Negatif" if s<0 else "Netral"
 
 # ================= YAHOO SAFE =================
-def get_yahoo(symbol, start, end, is_indo=True):
+def get_yahoo(symbol, start, end, is_indo):
 
     def to_unix(d):
         return int(datetime(d.year,d.month,d.day,tzinfo=timezone.utc).timestamp())
@@ -90,38 +88,37 @@ def get_yahoo(symbol, start, end, is_indo=True):
     sym = f"{symbol}.JK" if is_indo else symbol
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
 
-    try:
-        r = requests.get(url, headers=HEADERS, params={
-            "interval":"1d",
-            "period1":to_unix(start),
-            "period2":to_unix(end+timedelta(days=1))
-        })
+    r = requests.get(url, headers=HEADERS, params={
+        "interval":"1d",
+        "period1":to_unix(start),
+        "period2":to_unix(end+timedelta(days=1))
+    })
 
-        data = r.json()
-        result = data.get("chart",{}).get("result")
+    data = r.json()
+    result = data.get("chart",{}).get("result")
 
-        if not result: return None
+    if not result: return None
 
-        ts = result[0]["timestamp"]
-        close = result[0]["indicators"]["quote"][0]["close"]
+    ts = result[0]["timestamp"]
+    close = result[0]["indicators"]["quote"][0]["close"]
 
-        df = pd.DataFrame({
-            "Date":[datetime.fromtimestamp(t).date() for t in ts],
-            "Close":close
-        }).dropna()
+    df = pd.DataFrame({
+        "Date":[datetime.fromtimestamp(t).date() for t in ts],
+        "Close":close
+    }).dropna()
 
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Price_Change'] = df['Close'] - df['Prev_Close']
-        df['Pct_Change (%)'] = (df['Price_Change']/df['Prev_Close'])*100
+    df['Prev_Close'] = df['Close'].shift(1)
+    df['Price_Change'] = df['Close'] - df['Prev_Close']
+    df['Pct_Change (%)'] = (df['Price_Change']/df['Prev_Close'])*100
 
-        if not is_indo:
-            kurs = get_kurs()
-            df['Close_IDR'] = df['Close'] * kurs
+    if not is_indo:
+        df['Close_IDR'] = df['Close'] * get_kurs()
 
-        return df
+    return df
 
-    except:
-        return None
+# ================= FULL HISTORICAL =================
+def get_full_history(symbol, is_indo):
+    return get_yahoo(symbol, datetime.now()-timedelta(days=365*3), datetime.now(), is_indo)
 
 # ================= ALPHA =================
 def get_alpha(symbol, start, end):
@@ -139,11 +136,10 @@ def get_alpha(symbol, start, end):
         df = df.reset_index().rename(columns={"index":"Date"})
         df['Date'] = pd.to_datetime(df['Date']).dt.date
 
-        kurs = get_kurs()
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change']/df['Prev_Close'])*100
-        df['Close_IDR'] = df['Close'] * kurs
+        df['Close_IDR'] = df['Close'] * get_kurs()
 
         return df
 
@@ -151,100 +147,93 @@ def get_alpha(symbol, start, end):
         return None
 
 # ================= NEWS =================
-@st.cache_data(ttl=300)
 def get_news(keyword_encoded, start, end):
 
-    data = []
-
-    for d in pd.date_range(start, end):
-        url = f"https://news.google.com/rss/search?q={keyword_encoded}+after:{d.date()}+before:{(d+timedelta(days=1)).date()}&hl=id&gl=ID&ceid=ID:id"
-        feed = feedparser.parse(url)
+    data=[]
+    for d in pd.date_range(start,end):
+        url=f"https://news.google.com/rss/search?q={keyword_encoded}+after:{d.date()}+before:{(d+timedelta(days=1)).date()}&hl=id&gl=ID&ceid=ID:id"
+        feed=feedparser.parse(url)
 
         for e in feed.entries:
             data.append({
-                "date": pd.to_datetime(e.published).date(),
+                "Date": pd.to_datetime(e.published).date(),
                 "title": e.title,
                 "desc": getattr(e,"summary",""),
-                "source": e.source.title if hasattr(e,"source") else ""
+                "media": e.source.title if hasattr(e,"source") else ""
             })
 
     if not data: return None,None,None,None,None
 
-    df = pd.DataFrame(data).drop_duplicates(subset="title")
+    df=pd.DataFrame(data).drop_duplicates(subset="title")
 
-    df["doc"] = (df["title"]+" "+df["desc"]).apply(preprocess_text)
+    df["doc"]=(df["title"]+" "+df["desc"]).apply(preprocess_text)
 
-    df["sentiment_score"] = df["doc"].apply(sentiment_score)
-    df["sentiment_label"] = df["sentiment_score"].apply(sentiment_label)
+    df["sentiment_score"]=df["doc"].apply(sentiment_score)
+    df["sentiment_label"]=df["sentiment_score"].apply(sentiment_label)
 
-    text = " ".join(df["doc"])
+    text=" ".join(df["doc"])
 
     wc, common = None, None
     if text.strip():
         wc = WordCloud(background_color="white").generate(text)
         common = Counter(text.split()).most_common(10)
 
-    media = df["source"].value_counts().head(10)
+    media = df["media"].value_counts().head(10)
 
-    df_daily = df.groupby("date")["title"].apply(lambda x:" | ".join(x)).reset_index()
-    df_daily.rename(columns={"date":"Date"}, inplace=True)
+    df_daily = df.groupby("Date")["title"].apply(lambda x:" | ".join(x)).reset_index()
+    sent = df.groupby("Date")["sentiment_score"].mean().reset_index()
 
-    sent_daily = df.groupby("date")["sentiment_score"].mean().reset_index()
-    sent_daily.rename(columns={"date":"Date","sentiment_score":"Sentiment"}, inplace=True)
-
-    df_daily = pd.merge(df_daily, sent_daily, on="Date", how="left")
+    df_daily = pd.merge(df_daily, sent, on="Date", how="left")
 
     return df, df_daily, wc, common, media
 
 # ================= LSTM =================
-def lstm_predict(df):
+def lstm(df):
+    data=df[['Close']].values
+    if len(data)<20: return None
 
-    data = df[['Close']].dropna().values
-    if len(data) < 15: return None
-
-    scaler = MinMaxScaler()
-    data_scaled = scaler.fit_transform(data)
+    scaler=MinMaxScaler()
+    data=scaler.fit_transform(data)
 
     X,y=[],[]
-    for i in range(10,len(data_scaled)):
-        X.append(data_scaled[i-10:i])
-        y.append(data_scaled[i])
+    for i in range(10,len(data)):
+        X.append(data[i-10:i])
+        y.append(data[i])
 
     X,y=np.array(X),np.array(y)
 
-    model = Sequential([
-        LSTM(50,input_shape=(X.shape[1],1)),
+    model=Sequential([
+        LSTM(50,input_shape=(10,1)),
         Dense(1)
     ])
 
-    model.compile(optimizer='adam', loss='mse')
+    model.compile("adam","mse")
     model.fit(X,y,epochs=5,verbose=0)
 
-    pred = model.predict(X)
-    pred = scaler.inverse_transform(pred)
+    pred=model.predict(X)
+    pred=scaler.inverse_transform(pred)
 
-    df_pred = df.iloc[10:].copy()
-    df_pred['Prediksi'] = pred
+    df_out=df.iloc[10:].copy()
+    df_out["Prediksi"]=pred
 
-    return df_pred
+    return df_out
 
 # ================= STYLE =================
 def color(val):
     if pd.isna(val): return ""
-    return "color: green" if val>0 else "color: red"
+    return "color:green" if val>0 else "color:red"
 
 # ================= UI =================
 st.title("💹 Analisis Sentimen Berita Ekonomi pada Google News dan Pengaruhnya terhadap Volatilitas serta Pergerakan Intraday Harga Saham")
 
-market = st.selectbox("Jenis Saham", ["Indonesia (IDX)", "Global"])
-source = st.selectbox("Sumber Data", ["Yahoo", "Alpha"])
-
-ticker = st.text_input("Ticker", "BBCA")
+market = st.selectbox("Market", ["Indonesia","Global"])
+source = st.selectbox("Data Source", ["Yahoo","Alpha"])
+ticker = st.text_input("Ticker","BBCA")
 keyword_input = st.text_input("Keyword Berita")
 
 kw, suggestions, kw_encoded = smart_keyword(keyword_input, ticker)
 
-st.caption("💡 Rekomendasi keyword:")
+st.caption("💡 Smart Keyword:")
 st.write(suggestions)
 
 start = st.date_input("Start", datetime.now()-timedelta(days=30))
@@ -252,60 +241,59 @@ end = st.date_input("End", datetime.now())
 
 if st.button("RUN"):
 
-    is_indo = "Indonesia" in market
+    is_indo = market=="Indonesia"
 
-    # saham
-    df_s = get_yahoo(ticker,start,end,is_indo) if source=="Yahoo" else get_alpha(ticker,start,end)
+    # ================= HISTORICAL =================
+    df_full = get_full_history(ticker,is_indo)
 
-    # berita
+    # ================= RANGE =================
+    df_range = get_yahoo(ticker,start,end,is_indo) if source=="Yahoo" else get_alpha(ticker,start,end)
+
+    # ================= NEWS =================
     df_news, df_daily, wc, common, media = get_news(kw_encoded,start,end)
 
-    if df_s is None or df_daily is None:
-        st.error("Data gagal diambil")
-        st.stop()
-
-    df_merge = pd.merge(df_s, df_daily, on="Date", how="left")
+    if df_daily is not None and df_range is not None:
+        df_range = pd.merge(df_range, df_daily, on="Date", how="left")
 
     # ================= TABLE =================
-    cols = ['Date','Prev_Close','Close']
+    st.subheader("📊 Tabel Periode")
+    cols=['Date','Prev_Close','Close']
     if not is_indo: cols.append('Close_IDR')
-    cols += ['Price_Change','Pct_Change (%)','Sentiment','title']
+    cols+=['Price_Change','Pct_Change (%)','sentiment_score','title']
 
-    styled = df_merge[cols].style.applymap(color, subset=['Price_Change','Pct_Change (%)'])
+    styled=df_range[cols].style.applymap(color,subset=['Price_Change'])
 
-    format_dict = {
-        "Prev_Close": "{:.2f}",
-        "Close": "{:.2f}",
-        "Price_Change": "{:.2f}",
-        "Pct_Change (%)": "{:.2f}"
-    }
-
-    if "Close_IDR" in df_merge.columns:
-        format_dict["Close_IDR"] = "Rp {:,.2f}"
-
-    st.dataframe(styled.format(format_dict), use_container_width=True)
+    st.dataframe(styled.format({
+        "Prev_Close":"{:.2f}",
+        "Close":"{:.2f}",
+        "Price_Change":"{:.2f}",
+        "Pct_Change (%)":"{:.2f}",
+        "Close_IDR":"Rp {:,.2f}"
+    }), use_container_width=True)
 
     # ================= GRAFIK =================
-    st.subheader("📈 Harga")
-    st.line_chart(df_merge.set_index("Date")["Close"])
+    st.subheader("📈 Grafik Periode")
+    st.line_chart(df_range.set_index("Date")["Close"])
 
-    # ================= PREDIKSI =================
+    # ================= HISTORICAL =================
+    st.subheader("📈 Full Historical")
+    st.line_chart(df_full.set_index("Date")["Close"])
+
+    # ================= LSTM =================
     st.subheader("🤖 Prediksi LSTM")
-    df_pred = lstm_predict(df_s)
+    df_pred = lstm(df_full)
 
     if df_pred is not None:
-        fig, ax = plt.subplots()
-        ax.plot(df_pred['Date'], df_pred['Close'], label="Actual")
-        ax.plot(df_pred['Date'], df_pred['Prediksi'], label="Prediksi")
+        fig,ax=plt.subplots()
+        ax.plot(df_pred['Date'],df_pred['Close'],label="Actual")
+        ax.plot(df_pred['Date'],df_pred['Prediksi'],label="Prediksi")
         ax.legend()
         st.pyplot(fig)
-    else:
-        st.warning("Data tidak cukup untuk prediksi")
 
     # ================= WORDCLOUD =================
     st.subheader("☁️ WordCloud")
     if wc:
-        fig, ax = plt.subplots()
+        fig,ax=plt.subplots()
         ax.imshow(wc)
         ax.axis("off")
         st.pyplot(fig)
@@ -313,7 +301,7 @@ if st.button("RUN"):
     # ================= TOP WORD =================
     st.subheader("📊 Top Kata")
     if common:
-        st.table(pd.DataFrame(common, columns=["Kata","Jumlah"]))
+        st.table(pd.DataFrame(common,columns=["Kata","Jumlah"]))
 
     # ================= MEDIA =================
     st.subheader("🏆 Top Media")
@@ -321,9 +309,9 @@ if st.button("RUN"):
         st.table(media.reset_index().rename(columns={"index":"Media"}))
 
     # ================= SENTIMENT =================
-    st.subheader("📊 Distribusi Sentiment")
+    st.subheader("📊 Sentiment")
     st.bar_chart(df_news['sentiment_label'].value_counts())
 
     # ================= NEWS =================
-    st.subheader("📰 Data Berita")
+    st.subheader("📰 Berita")
     st.dataframe(df_news)
