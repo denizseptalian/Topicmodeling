@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import yfinance as yf
+from alpha_vantage.timeseries import TimeSeries
 import streamlit as st
 from wordcloud import WordCloud
 from collections import Counter
@@ -14,9 +15,12 @@ import time
 # =========================
 # CONFIG
 # =========================
-st.set_page_config(layout="wide")
+AV_API_KEY = "YQNUKAH419JA2RYV"
+
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
+
+st.set_page_config(layout="wide")
 
 # =========================
 # PREPROCESS
@@ -32,61 +36,78 @@ def preprocess_text(text):
         return ""
 
 # =========================
-# SMART STOCK FETCH (ANTI BLOCK)
+# YAHOO
 # =========================
-@st.cache_data(ttl=300)  # cache 5 menit
-def get_stock_data_safe(ticker, start_date, end_date):
+@st.cache_data(ttl=300)
+def get_yahoo(ticker, start, end):
     try:
         ticker_jk = ticker if ticker.endswith(".JK") else ticker + ".JK"
 
-        df = None
+        time.sleep(1)
+        df = yf.Ticker(ticker_jk).history(start=start, end=end)
 
-        # ===== TRY 1: Yahoo normal =====
-        for i in range(3):
-            try:
-                time.sleep(1)  # anti bot
-                stock = yf.Ticker(ticker_jk)
-                df = stock.history(start=start_date, end=end_date)
-
-                if df is not None and not df.empty:
-                    break
-            except:
-                continue
-
-        # ===== TRY 2: fallback tanpa .JK =====
-        if df is None or df.empty:
-            for i in range(2):
-                try:
-                    time.sleep(1)
-                    stock = yf.Ticker(ticker)
-                    df = stock.history(start=start_date, end=end_date)
-
-                    if df is not None and not df.empty:
-                        break
-                except:
-                    continue
-
-        if df is None or df.empty:
+        if df.empty:
             return None
 
         df = df.reset_index()
-
-        # Feature engineering
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Price_Change'] = df['Close'] - df['Prev_Close']
-        df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
-
         return df
 
-    except Exception as e:
-        st.error(f"Error saham: {e}")
+    except:
         return None
 
 # =========================
-# NEWS RSS (STABLE)
+# ALPHA VANTAGE
 # =========================
 @st.cache_data(ttl=300)
-def crawl_news_safe(keyword):
+def get_alpha(ticker, start, end):
+    try:
+        ts = TimeSeries(key=AV_API_KEY, output_format='pandas')
+        data, _ = ts.get_daily(symbol=ticker, outputsize='compact')
+
+        df = data.rename(columns={'4. close': 'Close'})
+        df.index = pd.to_datetime(df.index)
+
+        start = pd.to_datetime(start)
+        end = pd.to_datetime(end)
+
+        df = df.loc[(df.index >= start) & (df.index <= end)]
+        df = df.reset_index()
+
+        return df
+
+    except:
+        return None
+
+# =========================
+# SMART SOURCE
+# =========================
+def get_stock_data(source, ticker, start, end):
+
+    if source == "Yahoo Finance":
+        df = get_yahoo(ticker, start, end)
+        if df is None:
+            st.warning("⚠️ Yahoo gagal → fallback ke Alpha Vantage")
+            df = get_alpha(ticker, start, end)
+    else:
+        df = get_alpha(ticker, start, end)
+        if df is None:
+            st.warning("⚠️ Alpha gagal → coba Yahoo")
+            df = get_yahoo(ticker, start, end)
+
+    if df is None:
+        return None
+
+    df['Prev_Close'] = df['Close'].shift(1)
+    df['Price_Change'] = df['Close'] - df['Prev_Close']
+    df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
+
+    return df
+
+# =========================
+# NEWS FULL FEATURE
+# =========================
+@st.cache_data(ttl=300)
+def crawl_news(keyword):
     try:
         url = f"https://news.google.com/rss/search?q={keyword.replace(' ', '%20')}&hl=id&gl=ID&ceid=ID:id"
         feed = feedparser.parse(url)
@@ -106,6 +127,7 @@ def crawl_news_safe(keyword):
 
         df = pd.DataFrame(data)
 
+        # TEXT PROCESSING
         df["document"] = df["title"].apply(preprocess_text)
 
         text = " ".join(df["document"])
@@ -113,9 +135,14 @@ def crawl_news_safe(keyword):
         wordcloud, common = None, None
 
         if text.strip():
-            wordcloud = WordCloud(background_color="white").generate(text)
+            wordcloud = WordCloud(
+                background_color="white",
+                max_words=5000
+            ).generate(text)
+
             common = Counter(text.split()).most_common(10)
 
+        # TOP MEDIA
         top_media = df["source"].value_counts().head(10)
 
         return df, wordcloud, common, top_media
@@ -127,25 +154,28 @@ def crawl_news_safe(keyword):
 # =========================
 # UI
 # =========================
-st.title("💹 Dashboard Saham & Berita (ANTI BLOCK SYSTEM)")
+st.title("💹 Dashboard Saham & Berita (MULTI SOURCE PRO)")
 
-# Sidebar
 st.sidebar.header("⚙️ Pengaturan")
+
+source = st.sidebar.selectbox(
+    "Sumber Data Saham",
+    ["Yahoo Finance", "Alpha Vantage"]
+)
 
 ticker = st.sidebar.text_input("Ticker Saham", "BBCA")
 keyword = st.sidebar.text_input("Keyword Berita", "Bank BCA")
 
 c1, c2 = st.sidebar.columns(2)
-start_d = c1.date_input("Mulai", datetime.now() - timedelta(days=30))
-end_d = c2.date_input("Selesai", datetime.now())
+start = c1.date_input("Mulai", datetime.now() - timedelta(days=30))
+end = c2.date_input("Selesai", datetime.now())
 
-# BUTTON (tidak auto run)
 if st.sidebar.button("🚀 Jalankan Analisis"):
 
-    with st.spinner("Mengambil data dengan sistem anti-block..."):
+    with st.spinner("Mengambil data..."):
 
-        df_s = get_stock_data_safe(ticker, start_d, end_d)
-        df_n, wc, common, media = crawl_news_safe(keyword)
+        df_s = get_stock_data(source, ticker, start, end)
+        df_n, wc, common, media = crawl_news(keyword)
 
         tab1, tab2 = st.tabs(["📉 Saham", "📰 Berita"])
 
@@ -163,14 +193,14 @@ if st.sidebar.button("🚀 Jalankan Analisis"):
                     use_container_width=True
                 )
 
-                st.subheader("📈 Grafik Harga Close")
+                st.subheader("📈 Grafik Close")
                 st.line_chart(df_s.set_index("Date")['Close'])
 
             else:
-                st.warning("⚠️ Yahoo Finance gagal (kemungkinan diblok / data tidak tersedia)")
+                st.error("❌ Semua sumber gagal")
 
         # =========================
-        # BERITA
+        # BERITA (FULL FEATURE)
         # =========================
         with tab2:
             if df_n is not None:
@@ -181,13 +211,13 @@ if st.sidebar.button("🚀 Jalankan Analisis"):
 
                 if wc:
                     st.subheader("☁️ WordCloud")
-                    fig, ax = plt.subplots()
+                    fig, ax = plt.subplots(figsize=(10,5))
                     ax.imshow(wc)
                     ax.axis("off")
                     st.pyplot(fig)
 
                 if common:
-                    st.subheader("📌 Top Kata")
+                    st.subheader("📌 10 Kata Teratas")
                     st.table(pd.DataFrame(common, columns=["Kata","Jumlah"]))
 
                 if not media.empty:
