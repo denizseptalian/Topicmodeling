@@ -1,7 +1,6 @@
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import yfinance as yf
+from investiny import historical_data, search_assets
 import streamlit as st
 from wordcloud import WordCloud
 from collections import Counter
@@ -9,12 +8,11 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 import re
 from datetime import datetime, timedelta
 import feedparser
-import requests
 
 # =========================
 # CONFIG & INITIALIZATION
 # =========================
-st.set_page_config(layout="wide", page_title="Analisis Sentimen & Saham")
+st.set_page_config(layout="wide", page_title="Analisis Saham Investiny")
 
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
@@ -26,48 +24,47 @@ def preprocess_text(text):
     return stopword.remove(text)
 
 # =========================
-# STOCK DATA (YAHOO FIX)
+# STOCK DATA (INVESTINY VERSION)
 # =========================
-def get_stock_data_yahoo(ticker, start_date, end_date):
+def get_stock_data_investing(symbol, start_date, end_date):
     try:
-        # Tambah buffer hari agar Prev_Close tidak kosong di hari pertama
-        start_dt = pd.to_datetime(start_date) - timedelta(days=14)
-        end_dt = pd.to_datetime(end_date) + timedelta(days=1)
+        # 1. Cari ID Asset di Investing.com
+        results = search_assets(query=symbol)
+        if not results:
+            return None
         
-        session = requests.Session()
-        session.headers.update({'User-Agent': 'Mozilla/5.0'})
-
-        df = yf.download(
-            ticker, 
-            start=start_dt.strftime('%Y-%m-%d'), 
-            end=end_dt.strftime('%Y-%m-%d'), 
-            session=session,
-            progress=False,
-            auto_adjust=True
-        )
-
-        if df.empty: return None
-
-        # Handle MultiIndex Columns
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        df = df.sort_index()
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Price_Change'] = df['Close'] - df['Prev_Close']
+        # Ambil ID pertama yang ditemukan (biasanya yang paling relevan)
+        asset_id = results[0]["exchange_id"] 
+        
+        # 2. Tarik Data Historis
+        # Format tanggal investiny: MM/DD/YYYY
+        from_d = start_date.strftime('%m/%d/%Y')
+        to_d = end_date.strftime('%m/%d/%Y')
+        
+        data = historical_data(investing_id=asset_id, from_date=from_d, to_date=to_d)
+        
+        if not data: return None
+        
+        df = pd.DataFrame(data)
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date').sort_index()
+        
+        # Kalkulasi kolom tambahan
+        df['Prev_Close'] = df['close'].shift(1)
+        df['Price_Change'] = df['close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
-
-        # Kembalikan ke range tanggal yang dipilih user
-        df.index = pd.to_datetime(df.index)
-        mask = (df.index >= pd.to_datetime(start_date)) & (df.index <= pd.to_datetime(end_date))
-        return df.loc[mask]
+        
+        # Rename agar konsisten dengan tampilan sebelumnya
+        df = df.rename(columns={'close': 'Close'})
+        
+        return df.dropna(subset=['Close'])
 
     except Exception as e:
-        st.error(f"Error Saham: {e}")
+        st.error(f"Error Investiny: {e}")
         return None
 
 # =========================
-# NEWS (RSS VERSION)
+# NEWS DATA (RSS FEED)
 # =========================
 def crawl_news_rss(keyword):
     try:
@@ -75,74 +72,54 @@ def crawl_news_rss(keyword):
         feed = feedparser.parse(url)
         if not feed.entries: return None, None, None, None
 
-        data = []
-        for entry in feed.entries:
-            data.append({
-                "Tanggal": entry.get("published", ""),
-                "Judul": entry.title,
-                "Sumber": entry.get("source", {}).get("title", ""),
-                "Link": entry.link
-            })
-
+        data = [{"Tanggal": e.get("published", ""), "Judul": e.title, "Sumber": e.get("source", {}).get("title", ""), "Link": e.link} for e in feed.entries]
         df = pd.DataFrame(data)
         df["doc"] = df["Judul"].apply(preprocess_text)
         txt = " ".join(df["doc"])
         
         wc = WordCloud(background_color="white", width=800, height=400).generate(txt) if txt.strip() else None
         common = Counter(txt.split()).most_common(10)
-        top_media = df["Sumber"].value_counts().head(10)
-
-        return df, wc, common, top_media
+        media = df["Sumber"].value_counts().head(10)
+        return df, wc, common, media
     except:
         return None, None, None, None
 
 # =========================
 # UI
 # =========================
-st.title("💹 Analisis Sentimen Berita & Pergerakan Saham")
+st.title("💹 Dashboard Saham (Investiny Mode)")
 
-# Sidebar
 st.sidebar.header("Konfigurasi")
-ticker = st.sidebar.text_input("Ticker (Contoh: BBCA.JK atau ASHA.JK):", value="BBCA.JK")
-keyword = st.sidebar.text_input("Kata Kunci Berita:", value="Bank BCA")
+# Investiny lebih suka nama simpel seperti "BBCA" daripada "BBCA.JK"
+ticker_input = st.sidebar.text_input("Ticker (Contoh: BBCA, TLKM, ASII):", value="BBCA")
+keyword_input = st.sidebar.text_input("Kata Kunci Berita:", value="Bank BCA")
 
-c1, c2 = st.sidebar.columns(2)
-start_d = c1.date_input("Mulai", datetime.now() - timedelta(days=14))
-end_d = c2.date_input("Selesai", datetime.now())
+col_s, col_e = st.sidebar.columns(2)
+date_start = col_s.date_input("Mulai", datetime.now() - timedelta(days=20))
+date_end = col_e.date_input("Selesai", datetime.now())
 
 if st.sidebar.button("🚀 Jalankan Analisis"):
-    df_s = get_stock_data_yahoo(ticker, start_d, end_d)
-    df_n, wc, common, media = crawl_news_rss(keyword)
+    with st.spinner("Mengambil data dari Investing.com..."):
+        df_stock = get_stock_data_investing(ticker_input, date_start, date_end)
+        df_news, wc, common, media = crawl_news_rss(keyword_input)
 
-    tab1, tab2, tab3 = st.tabs(["📉 Pergerakan Saham", "📰 Daftar Berita", "📊 Analisis Kata & Sentimen"])
+        t1, t2, t3 = st.tabs(["📉 Harga Saham", "📰 Daftar Berita", "📊 Analisis"])
 
-    with tab1:
-        if df_s is not None and not df_s.empty:
-            st.subheader(f"Data Harga {ticker}")
-            st.dataframe(df_s[['Prev_Close', 'Close', 'Price_Change', 'Pct_Change (%)']].style.format("{:.2f}"), use_container_width=True)
-            st.line_chart(df_s["Close"])
-        else:
-            st.error("Gagal menarik data saham. Pastikan ticker benar (Gunakan .JK) dan bursa sedang buka.")
+        with t1:
+            if df_stock is not None and not df_stock.empty:
+                st.subheader(f"Data Harga {ticker_input} (Investing.com)")
+                st.dataframe(df_stock[['Prev_Close', 'Close', 'Price_Change', 'Pct_Change (%)']].style.format("{:.2f}"), use_container_width=True)
+                st.line_chart(df_stock["Close"])
+            else:
+                st.error("Data saham tidak ditemukan di Investiny. Coba masukkan nama perusahaan (misal: Bank Central Asia).")
 
-    with tab2:
-        if df_n is not None:
-            st.success(f"Ditemukan {len(df_n)} berita.")
-            st.dataframe(df_n[["Tanggal", "Judul", "Sumber", "Link"]], use_container_width=True)
-        else:
-            st.warning("Berita tidak ditemukan.")
+        with t2:
+            if df_news is not None:
+                st.dataframe(df_news[["Tanggal", "Judul", "Sumber", "Link"]], use_container_width=True)
 
-    with tab3:
-        if wc:
-            st.subheader("WordCloud (Kata Kunci Berita)")
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.imshow(wc, interpolation="bilinear")
-            ax.axis("off")
-            st.pyplot(fig)
-            
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.subheader("10 Kata Terbanyak")
-                st.table(pd.DataFrame(common, columns=["Kata", "Jumlah"]))
-            with col_b:
-                st.subheader("Top Media")
+        with t3:
+            if wc:
+                fig, ax = plt.subplots()
+                ax.imshow(wc); ax.axis("off")
+                st.pyplot(fig)
                 st.bar_chart(media)
