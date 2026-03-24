@@ -12,6 +12,7 @@ scikit-learn==1.3.2
 altair==4.2.0
 yfinance==0.2.37
 alpha_vantage==2.3.1
+feedparser==6.0.11
 requests
 pytz
 lxml
