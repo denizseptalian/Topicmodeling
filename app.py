@@ -275,7 +275,20 @@ if st.button("RUN"):
 
     styled = df_merge[cols].style.applymap(color, subset=['Price_Change','Pct_Change (%)'])
 
-    st.dataframe(styled, use_container_width=True)
+    format_dict = {
+    "Prev_Close": "{:.2f}",
+    "Close": "{:.2f}",
+    "Price_Change": "{:.2f}",
+    "Pct_Change (%)": "{:.2f}"
+     }
+
+    if "Close_IDR" in df_merge.columns:
+    format_dict["Close_IDR"] = "Rp {:,.2f}"
+
+    st.dataframe(
+    styled.format(format_dict),
+    use_container_width=True
+    )
 
     # ================= GRAFIK =================
     st.subheader("📈 Harga")
