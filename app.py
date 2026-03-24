@@ -9,9 +9,10 @@ from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFacto
 import re
 from datetime import datetime, timedelta
 import feedparser
+import time
 
 # =========================
-# STOPWORD
+# INIT
 # =========================
 factory = StopWordRemoverFactory()
 stopword = factory.create_stop_word_remover()
@@ -20,41 +21,51 @@ stopword = factory.create_stop_word_remover()
 # PREPROCESSING
 # =========================
 def preprocess_text(text):
-    if pd.isna(text):
+    try:
+        if pd.isna(text):
+            return ""
+        text = str(text).lower()
+        text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+        return stopword.remove(text)
+    except:
         return ""
-    text = str(text).lower()
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-    return stopword.remove(text)
 
 # =========================
-# YAHOO FINANCE (STABLE)
+# YAHOO FINANCE (SUPER SAFE)
 # =========================
 def get_stock_data_yf(ticker, start_date, end_date):
     try:
-        # auto tambah .JK
+        # Auto tambahkan .JK
         if not ticker.endswith(".JK"):
             ticker = ticker + ".JK"
 
-        # retry 3x (ANTI ERROR YFINANCE)
-        for i in range(3):
-            df = yf.download(
-                ticker,
-                start=start_date,
-                end=end_date,
-                progress=False,
-                threads=False
-            )
+        df = None
 
-            if df is not None and not df.empty:
-                break
+        # RETRY 3x (anti error Yahoo)
+        for i in range(3):
+            try:
+                df = yf.download(
+                    ticker,
+                    start=start_date,
+                    end=end_date,
+                    progress=False,
+                    threads=False
+                )
+
+                if df is not None and not df.empty:
+                    break
+
+            except Exception as e:
+                time.sleep(1)
 
         if df is None or df.empty:
-            st.error("❌ Data tidak ditemukan di Yahoo Finance")
+            st.error("❌ Data saham tidak ditemukan (Yahoo error / ticker salah)")
             return None
 
-        # FIX timezone issue
+        # Reset index biar aman
         df = df.reset_index()
 
+        # Feature engineering
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
         df['Pct_Change (%)'] = (df['Price_Change'] / df['Prev_Close']) * 100
@@ -66,7 +77,7 @@ def get_stock_data_yf(ticker, start_date, end_date):
         return None
 
 # =========================
-# NEWS RSS (STABLE)
+# NEWS RSS (100% WORK)
 # =========================
 def crawl_news_rss(keyword):
     try:
@@ -103,16 +114,18 @@ def crawl_news_rss(keyword):
         return df, wordcloud, common, top_media
 
     except Exception as e:
-        st.error(f"Error news: {e}")
+        st.error(f"Error news RSS: {e}")
         return None, None, None, None
 
 # =========================
 # STREAMLIT UI
 # =========================
 st.set_page_config(layout="wide")
-st.title("💹 Dashboard Saham & Berita (Yahoo Finance + RSS)")
+st.title("💹 Dashboard Saham & Berita (SUPER STABLE)")
 
 # Sidebar
+st.sidebar.header("⚙️ Pengaturan")
+
 ticker = st.sidebar.text_input("Ticker Saham", "BBCA")
 keyword = st.sidebar.text_input("Keyword Berita", "Bank BCA")
 
@@ -122,7 +135,7 @@ end_d = c2.date_input("Selesai", datetime.now())
 
 if st.sidebar.button("🚀 Jalankan"):
 
-    with st.spinner("Ambil data..."):
+    with st.spinner("Mengambil data..."):
 
         df_s = get_stock_data_yf(ticker, start_d, end_d)
         df_n, wc, common, media = crawl_news_rss(keyword)
@@ -138,16 +151,16 @@ if st.sidebar.button("🚀 Jalankan"):
                 st.success(f"✅ Data saham: {len(df_s)} hari")
 
                 st.dataframe(
-                    df_s[['Close', 'Prev_Close', 'Price_Change', 'Pct_Change (%)']]
+                    df_s[['Date','Close','Prev_Close','Price_Change','Pct_Change (%)']]
                     .style.format("{:.2f}"),
                     use_container_width=True
                 )
 
-                st.subheader("📈 Grafik Close")
-                st.line_chart(df_s['Close'])
+                st.subheader("📈 Grafik Harga Close")
+                st.line_chart(df_s.set_index("Date")['Close'])
 
             else:
-                st.warning("⚠️ Data saham tidak ditemukan")
+                st.warning("⚠️ Data saham tidak tersedia")
 
         # =========================
         # BERITA
