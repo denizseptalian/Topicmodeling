@@ -31,14 +31,29 @@ def preprocess_text(text):
 # =========================
 def get_stock_data_yf(ticker, start_date, end_date):
     try:
-        # Tambahkan .JK untuk saham Indonesia
+        # auto tambah .JK
         if not ticker.endswith(".JK"):
             ticker = ticker + ".JK"
 
-        df = yf.download(ticker, start=start_date, end=end_date)
+        # retry 3x (ANTI ERROR YFINANCE)
+        for i in range(3):
+            df = yf.download(
+                ticker,
+                start=start_date,
+                end=end_date,
+                progress=False,
+                threads=False
+            )
 
-        if df.empty:
+            if df is not None and not df.empty:
+                break
+
+        if df is None or df.empty:
+            st.error("❌ Data tidak ditemukan di Yahoo Finance")
             return None
+
+        # FIX timezone issue
+        df = df.reset_index()
 
         df['Prev_Close'] = df['Close'].shift(1)
         df['Price_Change'] = df['Close'] - df['Prev_Close']
