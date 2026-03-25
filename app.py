@@ -36,9 +36,9 @@ if "run" not in st.session_state:
     st.session_state.run = False
 
 # ================= SMART KEYWORD =================
-def smart_keyword(keyword, ticker):
+def smart_keyword(keyword, KODE EMITEN):
     if not keyword or keyword.strip()=="":
-        keyword = ticker
+        keyword = KODE EMITEN
 
     keyword = str(keyword).replace("\n"," ").replace("\r"," ")
     keyword = " ".join(keyword.split())
