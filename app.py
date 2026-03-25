@@ -315,3 +315,92 @@ if st.button("RUN"):
     # ================= NEWS =================
     st.subheader("📰 Berita")
     st.dataframe(df_news)
+    # ================= KORELASI =================
+    st.subheader("📊 Korelasi Sentimen vs Perubahan Harga")
+
+    if df_range is not None and 'sentiment_score' in df_range.columns:
+
+        df_corr = df_range[['Date','Pct_Change (%)','sentiment_score']].dropna()
+
+        if len(df_corr) > 2:
+            corr = df_corr['Pct_Change (%)'].corr(df_corr['sentiment_score'])
+
+            st.metric("Nilai Korelasi", f"{corr:.4f}")
+
+            if corr > 0.3:
+                st.success("📈 Korelasi Positif: Sentimen mempengaruhi kenaikan harga")
+            elif corr < -0.3:
+                st.error("📉 Korelasi Negatif: Sentimen berlawanan dengan harga")
+            else:
+                st.warning("⚖️ Korelasi Lemah: Sentimen kurang berpengaruh")
+
+            # Grafik scatter
+            fig, ax = plt.subplots()
+            ax.scatter(df_corr['sentiment_score'], df_corr['Pct_Change (%)'])
+            ax.set_xlabel("Sentiment Score")
+            ax.set_ylabel("Perubahan Harga (%)")
+            ax.set_title("Korelasi Sentimen vs Perubahan Harga")
+            st.pyplot(fig)
+
+        else:
+            st.warning("Data tidak cukup untuk menghitung korelasi")
+
+
+    # ================= REKOMENDASI =================
+    st.subheader("💡 Rekomendasi Trading")
+
+    def rekomendasi(df):
+        if df is None or len(df) < 3:
+            return "Data tidak cukup", "Data tidak cukup"
+
+        df = df.dropna(subset=['sentiment_score','Pct_Change (%)'])
+
+        if len(df) < 3:
+            return "Data tidak cukup", "Data tidak cukup"
+
+        # ambil 3 hari terakhir
+        last = df.tail(3)
+
+        avg_sent = last['sentiment_score'].mean()
+        avg_return = last['Pct_Change (%)'].mean()
+
+        # aturan sederhana
+        if avg_sent > 0.5 and avg_return > 0:
+            today = "BELI"
+        elif avg_sent < 0 and avg_return < 0:
+            today = "JANGAN BELI"
+        else:
+            today = "PANTAU"
+
+        # prediksi besok (pakai tren sederhana)
+        trend = last['Pct_Change (%)'].diff().mean()
+
+        if avg_sent > 0.5 and trend > 0:
+            tomorrow = "BELI"
+        elif avg_sent < 0 and trend < 0:
+            tomorrow = "JANGAN BELI"
+        else:
+            tomorrow = "PANTAU"
+
+        return today, tomorrow
+
+    if df_range is not None:
+        rec_today, rec_tomorrow = rekomendasi(df_range)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if rec_today == "BELI":
+                st.success(f"📅 Hari Ini: {rec_today}")
+            elif rec_today == "JANGAN BELI":
+                st.error(f"📅 Hari Ini: {rec_today}")
+            else:
+                st.warning(f"📅 Hari Ini: {rec_today}")
+
+        with col2:
+            if rec_tomorrow == "BELI":
+                st.success(f"📅 Besok: {rec_tomorrow}")
+            elif rec_tomorrow == "JANGAN BELI":
+                st.error(f"📅 Besok: {rec_tomorrow}")
+            else:
+                st.warning(f"📅 Besok: {rec_tomorrow}")
