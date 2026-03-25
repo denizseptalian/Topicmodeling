@@ -31,10 +31,6 @@ stopword = factory.create_stop_word_remover()
 
 st.set_page_config(layout="wide")
 
-# ================= SESSION STATE =================
-if "run" not in st.session_state:
-    st.session_state.run = False
-
 # ================= SMART KEYWORD =================
 def smart_keyword(keyword, ticker):
     if not keyword or keyword.strip()=="":
@@ -57,7 +53,7 @@ def smart_keyword(keyword, ticker):
 @st.cache_data(ttl=3600)
 def get_kurs():
     try:
-        r = requests.get("https://api.exchangerate.host/latest?base=USD&symbols=IDR", timeout=10).json()
+        r = requests.get("https://api.exchangerate.host/latest?base=USD&symbols=IDR").json()
         return r['rates']['IDR']
     except:
         return 15500
@@ -84,7 +80,6 @@ def sentiment_label(s):
     return "Positif" if s>0 else "Negatif" if s<0 else "Netral"
 
 # ================= YAHOO SAFE =================
-@st.cache_data(ttl=600)
 def get_yahoo(symbol, start, end, is_indo):
 
     def to_unix(d):
@@ -97,7 +92,7 @@ def get_yahoo(symbol, start, end, is_indo):
         "interval":"1d",
         "period1":to_unix(start),
         "period2":to_unix(end+timedelta(days=1))
-    }, timeout=10)
+    })
 
     data = r.json()
     result = data.get("chart",{}).get("result")
@@ -126,7 +121,6 @@ def get_full_history(symbol, is_indo):
     return get_yahoo(symbol, datetime.now()-timedelta(days=365*3), datetime.now(), is_indo)
 
 # ================= ALPHA =================
-@st.cache_data(ttl=600)
 def get_alpha(symbol, start, end):
 
     if not ALPHA_OK: return None
@@ -153,7 +147,6 @@ def get_alpha(symbol, start, end):
         return None
 
 # ================= NEWS =================
-@st.cache_data(ttl=600)
 def get_news(keyword_encoded, start, end):
 
     data=[]
@@ -247,52 +240,78 @@ start = st.date_input("Start", datetime.now()-timedelta(days=30))
 end = st.date_input("End", datetime.now())
 
 if st.button("RUN"):
-    st.session_state.run = True
 
-if st.session_state.run:
+    is_indo = market=="Indonesia"
 
-    with st.spinner("🔄 Mengambil data, mohon tunggu..."):
+    # ================= HISTORICAL =================
+    df_full = get_full_history(ticker,is_indo)
 
-        is_indo = market=="Indonesia"
+    # ================= RANGE =================
+    df_range = get_yahoo(ticker,start,end,is_indo) if source=="Yahoo" else get_alpha(ticker,start,end)
 
-        df_full = get_full_history(ticker,is_indo)
-        df_range = get_yahoo(ticker,start,end,is_indo) if source=="Yahoo" else get_alpha(ticker,start,end)
-        df_news, df_daily, wc, common, media = get_news(kw_encoded,start,end)
+    # ================= NEWS =================
+    df_news, df_daily, wc, common, media = get_news(kw_encoded,start,end)
 
-        if df_daily is not None and df_range is not None:
-            df_range = pd.merge(df_range, df_daily, on="Date", how="left")
+    if df_daily is not None and df_range is not None:
+        df_range = pd.merge(df_range, df_daily, on="Date", how="left")
 
-    # ================= KORELASI =================
-    st.subheader("📊 Korelasi Sentimen vs Perubahan Harga")
+    # ================= TABLE =================
+    st.subheader("📊 Tabel Periode")
+    cols=['Date','Prev_Close','Close']
+    if not is_indo: cols.append('Close_IDR')
+    cols+=['Price_Change','Pct_Change (%)','sentiment_score','title']
 
-    if df_range is not None and 'sentiment_score' in df_range.columns:
+    styled=df_range[cols].style.applymap(color,subset=['Price_Change'])
 
-        df_corr = df_range[['Date','Pct_Change (%)','sentiment_score']].dropna()
+    st.dataframe(styled.format({
+        "Prev_Close":"{:.2f}",
+        "Close":"{:.2f}",
+        "Price_Change":"{:.2f}",
+        "Pct_Change (%)":"{:.2f}",
+        "Close_IDR":"Rp {:,.2f}"
+    }), use_container_width=True)
 
-        if len(df_corr) > 2:
-            corr = df_corr['Pct_Change (%)'].corr(df_corr['sentiment_score'])
+    # ================= GRAFIK =================
+    st.subheader("📈 Grafik Periode")
+    st.line_chart(df_range.set_index("Date")["Close"])
 
-            st.metric("Nilai Korelasi", f"{corr:.4f}")
+    # ================= HISTORICAL =================
+    st.subheader("📈 Full Historical")
+    st.line_chart(df_full.set_index("Date")["Close"])
 
-        else:
-            st.warning("Data tidak cukup")
+    # ================= LSTM =================
+    st.subheader("🤖 Prediksi LSTM")
+    df_pred = lstm(df_full)
 
-    # ================= REKOMENDASI =================
-    st.subheader("💡 Rekomendasi Trading")
+    if df_pred is not None:
+        fig,ax=plt.subplots()
+        ax.plot(df_pred['Date'],df_pred['Close'],label="Actual")
+        ax.plot(df_pred['Date'],df_pred['Prediksi'],label="Prediksi")
+        ax.legend()
+        st.pyplot(fig)
 
-    def rekomendasi(df):
-        df = df.dropna(subset=['sentiment_score','Pct_Change (%)'])
-        last = df.tail(3)
+    # ================= WORDCLOUD =================
+    st.subheader("☁️ WordCloud")
+    if wc:
+        fig,ax=plt.subplots()
+        ax.imshow(wc)
+        ax.axis("off")
+        st.pyplot(fig)
 
-        avg_sent = last['sentiment_score'].mean()
-        avg_return = last['Pct_Change (%)'].mean()
+    # ================= TOP WORD =================
+    st.subheader("📊 Top Kata")
+    if common:
+        st.table(pd.DataFrame(common,columns=["Kata","Jumlah"]))
 
-        if avg_sent > 0.5 and avg_return > 0:
-            return "BELI"
-        elif avg_sent < 0 and avg_return < 0:
-            return "JANGAN BELI"
-        else:
-            return "PANTAU"
+    # ================= MEDIA =================
+    st.subheader("🏆 Top Media")
+    if not media.empty:
+        st.table(media.reset_index().rename(columns={"index":"Media"}))
 
-    if df_range is not None:
-        st.write("Hari ini:", rekomendasi(df_range))
+    # ================= SENTIMENT =================
+    st.subheader("📊 Sentiment")
+    st.bar_chart(df_news['sentiment_label'].value_counts())
+
+    # ================= NEWS =================
+    st.subheader("📰 Berita")
+    st.dataframe(df_news)
