@@ -31,6 +31,15 @@ stopword = factory.create_stop_word_remover()
 
 st.set_page_config(layout="wide")
 
+# ================= SESSION =================
+if "run" not in st.session_state:
+    st.session_state.run = False
+
+# ================= INIT VAR =================
+df_full = None
+df_range = None
+df_news = None
+
 # ================= SMART KEYWORD =================
 def smart_keyword(keyword, ticker):
     if not keyword or keyword.strip()=="":
@@ -53,7 +62,7 @@ def smart_keyword(keyword, ticker):
 @st.cache_data(ttl=3600)
 def get_kurs():
     try:
-        r = requests.get("https://api.exchangerate.host/latest?base=USD&symbols=IDR").json()
+        r = requests.get("https://api.exchangerate.host/latest?base=USD&symbols=IDR", timeout=10).json()
         return r['rates']['IDR']
     except:
         return 15500
@@ -79,7 +88,8 @@ def sentiment_score(text):
 def sentiment_label(s):
     return "Positif" if s>0 else "Negatif" if s<0 else "Netral"
 
-# ================= YAHOO SAFE =================
+# ================= YAHOO =================
+@st.cache_data(ttl=600)
 def get_yahoo(symbol, start, end, is_indo):
 
     def to_unix(d):
@@ -92,11 +102,10 @@ def get_yahoo(symbol, start, end, is_indo):
         "interval":"1d",
         "period1":to_unix(start),
         "period2":to_unix(end+timedelta(days=1))
-    })
+    }, timeout=10)
 
     data = r.json()
     result = data.get("chart",{}).get("result")
-
     if not result: return None
 
     ts = result[0]["timestamp"]
@@ -116,37 +125,11 @@ def get_yahoo(symbol, start, end, is_indo):
 
     return df
 
-# ================= FULL HISTORICAL =================
 def get_full_history(symbol, is_indo):
     return get_yahoo(symbol, datetime.now()-timedelta(days=365*3), datetime.now(), is_indo)
 
-# ================= ALPHA =================
-def get_alpha(symbol, start, end):
-
-    if not ALPHA_OK: return None
-
-    try:
-        ts = TimeSeries(key=AV_API_KEY, output_format='pandas')
-        data,_ = ts.get_daily(symbol=symbol)
-
-        df = data.rename(columns={'4. close':'Close'})
-        df.index = pd.to_datetime(df.index)
-
-        df = df.loc[(df.index>=pd.to_datetime(start)) & (df.index<=pd.to_datetime(end))]
-        df = df.reset_index().rename(columns={"index":"Date"})
-        df['Date'] = pd.to_datetime(df['Date']).dt.date
-
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Price_Change'] = df['Close'] - df['Prev_Close']
-        df['Pct_Change (%)'] = (df['Price_Change']/df['Prev_Close'])*100
-        df['Close_IDR'] = df['Close'] * get_kurs()
-
-        return df
-
-    except:
-        return None
-
 # ================= NEWS =================
+@st.cache_data(ttl=600)
 def get_news(keyword_encoded, start, end):
 
     data=[]
@@ -165,303 +148,60 @@ def get_news(keyword_encoded, start, end):
     if not data: return None,None,None,None,None
 
     df=pd.DataFrame(data).drop_duplicates(subset="title")
-
     df["doc"]=(df["title"]+" "+df["desc"]).apply(preprocess_text)
-
     df["sentiment_score"]=df["doc"].apply(sentiment_score)
     df["sentiment_label"]=df["sentiment_score"].apply(sentiment_label)
 
     text=" ".join(df["doc"])
-
-    wc, common = None, None
-    if text.strip():
-        wc = WordCloud(background_color="white").generate(text)
-        common = Counter(text.split()).most_common(10)
+    wc = WordCloud(background_color="white").generate(text) if text.strip() else None
+    common = Counter(text.split()).most_common(10) if text.strip() else None
 
     media = df["media"].value_counts().head(10)
 
     df_daily = df.groupby("Date")["title"].apply(lambda x:" | ".join(x)).reset_index()
     sent = df.groupby("Date")["sentiment_score"].mean().reset_index()
-
     df_daily = pd.merge(df_daily, sent, on="Date", how="left")
 
     return df, df_daily, wc, common, media
 
-# ================= LSTM =================
-def lstm(df):
-    data=df[['Close']].values
-    if len(data)<20: return None
-
-    scaler=MinMaxScaler()
-    data=scaler.fit_transform(data)
-
-    X,y=[],[]
-    for i in range(10,len(data)):
-        X.append(data[i-10:i])
-        y.append(data[i])
-
-    X,y=np.array(X),np.array(y)
-
-    model=Sequential([
-        LSTM(50,input_shape=(10,1)),
-        Dense(1)
-    ])
-
-    model.compile("adam","mse")
-    model.fit(X,y,epochs=5,verbose=0)
-
-    pred=model.predict(X)
-    pred=scaler.inverse_transform(pred)
-
-    df_out=df.iloc[10:].copy()
-    df_out["Prediksi"]=pred
-
-    return df_out
-
-# ================= STYLE =================
-def color(val):
-    if pd.isna(val): return ""
-    return "color:green" if val>0 else "color:red"
-
-# ================= UI =================
-st.title("💹 Analisis Sentimen Berita Ekonomi pada Google News dan Pengaruhnya terhadap Volatilitas serta Pergerakan Intraday Harga Saham")
-
-market = st.selectbox("Market", ["Indonesia","Global"])
-source = st.selectbox("Data Source", ["Yahoo","Alpha"])
-ticker = st.text_input("Ticker","BBCA")
-keyword_input = st.text_input("Keyword Berita")
-
-kw, suggestions, kw_encoded = smart_keyword(keyword_input, ticker)
-
-st.caption("💡 Smart Keyword:")
-st.write(suggestions)
-
-start = st.date_input("Start", datetime.now()-timedelta(days=30))
-end = st.date_input("End", datetime.now())
-
-if st.button("RUN"):
-
-    is_indo = market=="Indonesia"
-
-    # ================= HISTORICAL =================
-    df_full = get_full_history(ticker,is_indo)
-
-    # ================= RANGE =================
-    df_range = get_yahoo(ticker,start,end,is_indo) if source=="Yahoo" else get_alpha(ticker,start,end)
-
-    # ================= NEWS =================
-    df_news, df_daily, wc, common, media = get_news(kw_encoded,start,end)
-
-    if df_daily is not None and df_range is not None:
-        df_range = pd.merge(df_range, df_daily, on="Date", how="left")
-
-    # ================= TABLE =================
-    st.subheader("📊 Tabel Periode")
-    cols=['Date','Prev_Close','Close']
-    if not is_indo: cols.append('Close_IDR')
-    cols+=['Price_Change','Pct_Change (%)','sentiment_score','title']
-
-    styled=df_range[cols].style.applymap(color,subset=['Price_Change'])
-
-    st.dataframe(styled.format({
-        "Prev_Close":"{:.2f}",
-        "Close":"{:.2f}",
-        "Price_Change":"{:.2f}",
-        "Pct_Change (%)":"{:.2f}",
-        "Close_IDR":"Rp {:,.2f}"
-    }), use_container_width=True)
-
-    # ================= GRAFIK =================
-    st.subheader("📈 Grafik Periode")
-    st.line_chart(df_range.set_index("Date")["Close"])
-
-    # ================= HISTORICAL =================
-    st.subheader("📈 Full Historical")
-    st.line_chart(df_full.set_index("Date")["Close"])
-
-    # ================= LSTM =================
-    st.subheader("🤖 Prediksi LSTM")
-    df_pred = lstm(df_full)
-
-    if df_pred is not None:
-        fig,ax=plt.subplots()
-        ax.plot(df_pred['Date'],df_pred['Close'],label="Actual")
-        ax.plot(df_pred['Date'],df_pred['Prediksi'],label="Prediksi")
-        ax.legend()
-        st.pyplot(fig)
-
-    # ================= WORDCLOUD =================
-    st.subheader("☁️ WordCloud")
-    if wc:
-        fig,ax=plt.subplots()
-        ax.imshow(wc)
-        ax.axis("off")
-        st.pyplot(fig)
-
-    # ================= TOP WORD =================
-    st.subheader("📊 Top Kata")
-    if common:
-        st.table(pd.DataFrame(common,columns=["Kata","Jumlah"]))
-
-    # ================= MEDIA =================
-    st.subheader("🏆 Top Media")
-    if not media.empty:
-        st.table(media.reset_index().rename(columns={"index":"Media"}))
-
-    # ================= SENTIMENT =================
-    st.subheader("📊 Sentiment")
-    st.bar_chart(df_news['sentiment_label'].value_counts())
-
-    # ================= NEWS =================
-    st.subheader("📰 Berita")
-    st.dataframe(df_news)
-    # ================= KORELASI =================
-    st.subheader("📊 Korelasi Sentimen vs Perubahan Harga")
-
-    if df_range is not None and 'sentiment_score' in df_range.columns:
-
-        df_corr = df_range[['Date','Pct_Change (%)','sentiment_score']].dropna()
-
-        if len(df_corr) > 2:
-            corr = df_corr['Pct_Change (%)'].corr(df_corr['sentiment_score'])
-
-            st.metric("Nilai Korelasi", f"{corr:.4f}")
-
-            if corr > 0.3:
-                st.success("📈 Korelasi Positif: Sentimen mempengaruhi kenaikan harga")
-            elif corr < -0.3:
-                st.error("📉 Korelasi Negatif: Sentimen berlawanan dengan harga")
-            else:
-                st.warning("⚖️ Korelasi Lemah: Sentimen kurang berpengaruh")
-
-            # Grafik scatter
-            fig, ax = plt.subplots()
-            ax.scatter(df_corr['sentiment_score'], df_corr['Pct_Change (%)'])
-            ax.set_xlabel("Sentiment Score")
-            ax.set_ylabel("Perubahan Harga (%)")
-            ax.set_title("Korelasi Sentimen vs Perubahan Harga")
-            st.pyplot(fig)
-
-        else:
-            st.warning("Data tidak cukup untuk menghitung korelasi")
-
-
-    # ================= REKOMENDASI =================
-    st.subheader("💡 Rekomendasi Trading")
-
-    def rekomendasi(df):
-        if df is None or len(df) < 3:
-            return "Data tidak cukup", "Data tidak cukup"
-
-        df = df.dropna(subset=['sentiment_score','Pct_Change (%)'])
-
-        if len(df) < 3:
-            return "Data tidak cukup", "Data tidak cukup"
-
-        # ambil 3 hari terakhir
-        last = df.tail(3)
-
-        avg_sent = last['sentiment_score'].mean()
-        avg_return = last['Pct_Change (%)'].mean()
-
-        # aturan sederhana
-        if avg_sent > 0.5 and avg_return > 0:
-            today = "BELI"
-        elif avg_sent < 0 and avg_return < 0:
-            today = "JANGAN BELI"
-        else:
-            today = "PANTAU"
-
-        # prediksi besok (pakai tren sederhana)
-        trend = last['Pct_Change (%)'].diff().mean()
-
-        if avg_sent > 0.5 and trend > 0:
-            tomorrow = "BELI"
-        elif avg_sent < 0 and trend < 0:
-            tomorrow = "JANGAN BELI"
-        else:
-            tomorrow = "PANTAU"
-
-        return today, tomorrow
-
-    if df_range is not None:
-        rec_today, rec_tomorrow = rekomendasi(df_range)
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            if rec_today == "BELI":
-                st.success(f"📅 Hari Ini: {rec_today}")
-            elif rec_today == "JANGAN BELI":
-                st.error(f"📅 Hari Ini: {rec_today}")
-            else:
-                st.warning(f"📅 Hari Ini: {rec_today}")
-
-        with col2:
-            if rec_tomorrow == "BELI":
-                st.success(f"📅 Besok: {rec_tomorrow}")
-            elif rec_tomorrow == "JANGAN BELI":
-                st.error(f"📅 Besok: {rec_tomorrow}")
-            else:
-                st.warning(f"📅 Besok: {rec_tomorrow}")
-# ================= PREDIKSI BESOK =================
-st.subheader("🔮 Prediksi Harga Besok")
-
+# ================= LSTM PREDIKSI BESOK =================
 def predict_next_day(df):
     if df is None or len(df) < 20:
         return None
 
     data = df[['Close']].values
-
     scaler = MinMaxScaler()
     data_scaled = scaler.fit_transform(data)
 
     X = []
     for i in range(10, len(data_scaled)):
         X.append(data_scaled[i-10:i])
-
     X = np.array(X)
+
+    y = data_scaled[10:]
 
     model = Sequential([
         LSTM(50, input_shape=(10,1)),
         Dense(1)
     ])
 
-    y = data_scaled[10:]
     model.compile("adam","mse")
     model.fit(X, y, epochs=5, verbose=0)
 
-    # ambil 10 hari terakhir untuk prediksi besok
     last_seq = data_scaled[-10:]
     last_seq = np.reshape(last_seq, (1,10,1))
 
-    next_pred = model.predict(last_seq)
-    next_pred = scaler.inverse_transform(next_pred)
+    pred = model.predict(last_seq)
+    pred = scaler.inverse_transform(pred)
 
-    return float(next_pred[0][0])
-
-
-next_price = predict_next_day(df_full)
-
-if next_price:
-    last_price = df_full['Close'].iloc[-1]
-    change_pct = ((next_price - last_price)/last_price)*100
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric("Harga Terakhir", f"{last_price:.2f}")
-    col2.metric("Prediksi Besok", f"{next_price:.2f}")
-    col3.metric("Potensi (%)", f"{change_pct:.2f}%")
+    return float(pred[0][0])
 
 # ================= AUTO SIGNAL =================
-st.subheader("🚦 Auto Trading Signal")
-
 def auto_signal(df, next_price):
     if df is None or next_price is None:
-        return "TIDAK ADA DATA", 0
+        return "NO DATA", 0
 
     df = df.dropna(subset=['sentiment_score','Pct_Change (%)'])
-
     if len(df) < 5:
         return "DATA KURANG", 0
 
@@ -469,63 +209,71 @@ def auto_signal(df, next_price):
 
     avg_sent = last['sentiment_score'].mean()
     momentum = last['Pct_Change (%)'].mean()
-
     last_price = df['Close'].iloc[-1]
-    expected_return = (next_price - last_price)/last_price
+
+    expected = (next_price - last_price)/last_price
 
     score = 0
-
-    # ===== SENTIMENT =====
     if avg_sent > 0: score += 1
-    if avg_sent > 1: score += 1
-
-    # ===== MOMENTUM =====
     if momentum > 0: score += 1
+    if expected > 0: score += 2
+    if expected > 0.02: score += 1
 
-    # ===== PREDIKSI =====
-    if expected_return > 0: score += 2
-    if expected_return > 0.02: score += 1
+    if score >= 4: signal = "🔥 STRONG BUY"
+    elif score >= 3: signal = "✅ BUY"
+    elif score == 2: signal = "⚖️ HOLD"
+    else: signal = "❌ SELL"
 
-    # ===== FINAL DECISION =====
-    if score >= 4:
-        signal = "🔥 STRONG BUY"
-    elif score >= 3:
-        signal = "✅ BUY"
-    elif score == 2:
-        signal = "⚖️ HOLD / PANTAU"
+    return signal, min(score/5*100,100)
+
+# ================= UI =================
+st.title("💹 Analisis Sentimen + AI Trading Signal")
+
+market = st.selectbox("Market", ["Indonesia","Global"])
+ticker = st.text_input("Ticker","BBCA")
+keyword_input = st.text_input("Keyword Berita")
+
+kw, suggestions, kw_encoded = smart_keyword(keyword_input, ticker)
+st.write(suggestions)
+
+start = st.date_input("Start", datetime.now()-timedelta(days=30))
+end = st.date_input("End", datetime.now())
+
+if st.button("RUN"):
+    st.session_state.run = True
+
+if st.session_state.run:
+
+    with st.spinner("Loading data..."):
+
+        is_indo = market=="Indonesia"
+
+        df_full = get_full_history(ticker,is_indo)
+        df_range = get_yahoo(ticker,start,end,is_indo)
+        df_news, df_daily, wc, common, media = get_news(kw_encoded,start,end)
+
+        if df_daily is not None and df_range is not None:
+            df_range = pd.merge(df_range, df_daily, on="Date", how="left")
+
+    # ================= PREDIKSI =================
+    st.subheader("🔮 Prediksi Besok")
+
+    next_price = predict_next_day(df_full)
+
+    if next_price:
+        last_price = df_full['Close'].iloc[-1]
+        change = ((next_price-last_price)/last_price)*100
+
+        st.metric("Prediksi", f"{next_price:.2f}", f"{change:.2f}%")
+
+    # ================= SIGNAL =================
+    st.subheader("🚦 Signal")
+
+    signal, conf = auto_signal(df_range, next_price)
+
+    if "BUY" in signal:
+        st.success(f"{signal} ({conf:.1f}%)")
+    elif "SELL" in signal:
+        st.error(f"{signal} ({conf:.1f}%)")
     else:
-        signal = "❌ SELL"
-
-    confidence = min(score / 5 * 100, 100)
-
-    return signal, confidence
-
-
-signal, confidence = auto_signal(df_range, next_price)
-
-if "BUY" in signal:
-    st.success(f"{signal} (Confidence: {confidence:.1f}%)")
-elif "SELL" in signal:
-    st.error(f"{signal} (Confidence: {confidence:.1f}%)")
-else:
-    st.warning(f"{signal} (Confidence: {confidence:.1f}%)")
-
-# ================= VISUAL PREDIKSI BESOK =================
-st.subheader("📈 Visual Prediksi Besok")
-
-if next_price:
-    df_plot = df_full.tail(30).copy()
-
-    next_date = df_plot['Date'].max() + timedelta(days=1)
-
-    df_future = pd.DataFrame({
-        "Date":[next_date],
-        "Close":[next_price]
-    })
-
-    df_plot2 = pd.concat([df_plot[['Date','Close']], df_future])
-
-    fig, ax = plt.subplots()
-    ax.plot(df_plot2['Date'], df_plot2['Close'], marker='o')
-    ax.set_title("Prediksi Harga Besok")
-    st.pyplot(fig)
+        st.warning(f"{signal} ({conf:.1f}%)")
