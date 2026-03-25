@@ -404,4 +404,128 @@ if st.button("RUN"):
                 st.error(f"📅 Besok: {rec_tomorrow}")
             else:
                 st.warning(f"📅 Besok: {rec_tomorrow}")
+# ================= PREDIKSI BESOK =================
+st.subheader("🔮 Prediksi Harga Besok")
 
+def predict_next_day(df):
+    if df is None or len(df) < 20:
+        return None
+
+    data = df[['Close']].values
+
+    scaler = MinMaxScaler()
+    data_scaled = scaler.fit_transform(data)
+
+    X = []
+    for i in range(10, len(data_scaled)):
+        X.append(data_scaled[i-10:i])
+
+    X = np.array(X)
+
+    model = Sequential([
+        LSTM(50, input_shape=(10,1)),
+        Dense(1)
+    ])
+
+    y = data_scaled[10:]
+    model.compile("adam","mse")
+    model.fit(X, y, epochs=5, verbose=0)
+
+    # ambil 10 hari terakhir untuk prediksi besok
+    last_seq = data_scaled[-10:]
+    last_seq = np.reshape(last_seq, (1,10,1))
+
+    next_pred = model.predict(last_seq)
+    next_pred = scaler.inverse_transform(next_pred)
+
+    return float(next_pred[0][0])
+
+
+next_price = predict_next_day(df_full)
+
+if next_price:
+    last_price = df_full['Close'].iloc[-1]
+    change_pct = ((next_price - last_price)/last_price)*100
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("Harga Terakhir", f"{last_price:.2f}")
+    col2.metric("Prediksi Besok", f"{next_price:.2f}")
+    col3.metric("Potensi (%)", f"{change_pct:.2f}%")
+
+# ================= AUTO SIGNAL =================
+st.subheader("🚦 Auto Trading Signal")
+
+def auto_signal(df, next_price):
+    if df is None or next_price is None:
+        return "TIDAK ADA DATA", 0
+
+    df = df.dropna(subset=['sentiment_score','Pct_Change (%)'])
+
+    if len(df) < 5:
+        return "DATA KURANG", 0
+
+    last = df.tail(5)
+
+    avg_sent = last['sentiment_score'].mean()
+    momentum = last['Pct_Change (%)'].mean()
+
+    last_price = df['Close'].iloc[-1]
+    expected_return = (next_price - last_price)/last_price
+
+    score = 0
+
+    # ===== SENTIMENT =====
+    if avg_sent > 0: score += 1
+    if avg_sent > 1: score += 1
+
+    # ===== MOMENTUM =====
+    if momentum > 0: score += 1
+
+    # ===== PREDIKSI =====
+    if expected_return > 0: score += 2
+    if expected_return > 0.02: score += 1
+
+    # ===== FINAL DECISION =====
+    if score >= 4:
+        signal = "🔥 STRONG BUY"
+    elif score >= 3:
+        signal = "✅ BUY"
+    elif score == 2:
+        signal = "⚖️ HOLD / PANTAU"
+    else:
+        signal = "❌ SELL"
+
+    confidence = min(score / 5 * 100, 100)
+
+    return signal, confidence
+
+
+signal, confidence = auto_signal(df_range, next_price)
+
+if "BUY" in signal:
+    st.success(f"{signal} (Confidence: {confidence:.1f}%)")
+elif "SELL" in signal:
+    st.error(f"{signal} (Confidence: {confidence:.1f}%)")
+else:
+    st.warning(f"{signal} (Confidence: {confidence:.1f}%)")
+
+# ================= VISUAL PREDIKSI BESOK =================
+st.subheader("📈 Visual Prediksi Besok")
+
+if next_price:
+    df_plot = df_full.tail(30).copy()
+
+    next_date = df_plot['Date'].max() + timedelta(days=1)
+
+    df_future = pd.DataFrame({
+        "Date":[next_date],
+        "Close":[next_price]
+    })
+
+    df_plot2 = pd.concat([df_plot[['Date','Close']], df_future])
+
+    fig, ax = plt.subplots()
+    ax.plot(df_plot2['Date'], df_plot2['Close'], marker='o')
+    ax.set_title("Prediksi Harga Besok")
+    st.pyplot(fig)
